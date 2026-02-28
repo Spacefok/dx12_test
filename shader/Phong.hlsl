@@ -23,6 +23,9 @@ cbuffer PassCB : register(b1)
 
     float2 gUvScroll;
     float2 gUvTiling;
+
+    float gTime;
+    float3 _pad3;
 };
 
 cbuffer MaterialCB : register(b2)
@@ -31,6 +34,7 @@ cbuffer MaterialCB : register(b2)
     float4 gMatUvTilingOffset; // xy = tiling, zw = offset
     uint gMatHasTexture;
     float3 gMatPad;
+    float4 gMatWindParams; // x = enabled, y = amplitude, z = spatial frequency, w = speed
 };
 
 Texture2D gDiffuseMap : register(t0);
@@ -56,8 +60,23 @@ struct VertexOut
 VertexOut VS(VertexIn vin)
 {
     VertexOut vout;
-    
+
     float4 posW = mul(float4(vin.PosL, 1.0f), gWorld);
+    if (gMatWindParams.x > 0.5f)
+    {
+        const float2 windDir = normalize(float2(0.8f, 0.6f));
+        float bendWeight = saturate(vin.TexC.y);
+
+        float phase = gTime * gMatWindParams.w + dot(posW.xyz, float3(3.1f, 1.7f, 2.3f)) * gMatWindParams.z;
+        float gust = sin(phase) + 0.5f * sin(phase * 1.91f + 1.2f);
+        float flutter = sin(phase * 2.7f + vin.TexC.x * 6.2831853f) * 0.25f;
+        float wind = (gust + flutter) * gMatWindParams.y * bendWeight;
+
+        posW.x += windDir.x * wind;
+        posW.z += windDir.y * wind;
+        posW.y += abs(wind) * 0.2f;
+    }
+
     vout.PosW = posW.xyz;
     
     vout.NormalW = mul(vin.NormalL, (float3x3) gWorldInvTranspose);

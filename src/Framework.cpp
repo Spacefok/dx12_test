@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <vector>
 #include <algorithm>
+#include <cctype>
 #include <cfloat>
 #include <fstream>
 #include <cwctype>
@@ -625,6 +626,7 @@ void Framework::Update(const double& dt)
 	pass.SpecPower = 32.0f;
 	pass.UvScroll = m_uvAnimation;
 	pass.UvTiling = m_uvGlobalTiling;
+	pass.Time = static_cast<float>(m_timer.TotalTime());
 
 	m_passCB->CopyData(0, pass);
 }
@@ -665,6 +667,7 @@ void Framework::Draw()
 			srcMaterial.UvOffset.y
 		};
 		mat.HasTexture = srcMaterial.HasTexture ? 1u : 0u;
+		mat.WindParams = srcMaterial.WindParams;
 
 		m_commandList->SetGraphicsRoot32BitConstants(
 			1,
@@ -1432,8 +1435,20 @@ void Framework::BuildObjVB_Upload()
 			static_cast<float>(srcMaterial.diffuse_texopt.origin_offset[0]),
 			static_cast<float>(srcMaterial.diffuse_texopt.origin_offset[1])
 		};
+		mat.WindParams = { 0.0f, 0.0f, 0.0f, 0.0f };
 		mat.HasTexture = false;
 		mat.TextureIndex = 0;
+
+		std::string materialNameLower = srcMaterial.name;
+		std::transform(
+			materialNameLower.begin(),
+			materialNameLower.end(),
+			materialNameLower.begin(),
+			[](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+
+		if (materialNameLower.find("leaf") != std::string::npos) {
+			mat.WindParams = { 1.0f, 0.020f, 1.45f, 1.8f };
+		}
 
 		if (!srcMaterial.diffuse_texname.empty())
 		{

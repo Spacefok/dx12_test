@@ -42,6 +42,9 @@ struct alignas(16) PassConstants {
 
 	DirectX::XMFLOAT2 UvScroll = { 0.0f, 0.0f };
 	DirectX::XMFLOAT2 UvTiling = { 1.0f, 1.0f };
+
+	float Time = 0.0f;
+	DirectX::XMFLOAT3 _pad3 = { 0.0f, 0.0f, 0.0f };
 };
 
 struct alignas(16) MaterialConstants {
@@ -49,6 +52,7 @@ struct alignas(16) MaterialConstants {
 	DirectX::XMFLOAT4 UvTilingOffset = { 1.0f, 1.0f, 0.0f, 0.0f };
 	std::uint32_t HasTexture = 0;
 	DirectX::XMFLOAT3 _pad = { 0.0f, 0.0f, 0.0f };
+	DirectX::XMFLOAT4 WindParams = { 0.0f, 0.0f, 0.0f, 0.0f }; // x = enabled, y = amplitude, z = spatial frequency, w = speed
 };
 
 static_assert(sizeof(ObjectConstants) % 16 == 0, "ObjectConstants must be 16-byte aligned sized.");

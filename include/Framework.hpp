@@ -138,6 +138,7 @@ private:
 		DirectX::XMFLOAT4 DiffuseAlbedo = { 1.0f, 1.0f, 1.0f, 1.0f };
 		DirectX::XMFLOAT2 UvTiling = { 1.0f, 1.0f };
 		DirectX::XMFLOAT2 UvOffset = { 0.0f, 0.0f };
+		DirectX::XMFLOAT4 WindParams = { 0.0f, 0.0f, 0.0f, 0.0f };
 		bool HasTexture = false;
 		UINT TextureIndex = 0;
 	};
