@@ -1,4 +1,4 @@
-#include "Framework.hpp"
+п»ї#include "Framework.hpp"
 #include <DirectXColors.h>
 #include <DirectXMath.h>
 #include <array>
@@ -6,6 +6,7 @@
 #include <unordered_map>
 #include <cmath>
 #include <string>
+#include <wincodec.h>
 
 #define TINYOBJLOADER_IMPLEMENTATION
 #include "tiny_obj_loader.h"
@@ -14,12 +15,245 @@
 #include <vector>
 #include <algorithm>
 #include <cfloat>
+#include <fstream>
+#include <cwctype>
 
 #if defined(_DEBUG)
 #include <d3d12sdklayers.h>
 #endif
 
 using namespace DirectX;
+
+#pragma comment(lib, "windowscodecs.lib")
+
+namespace {
+struct RgbaImage {
+	UINT Width = 1;
+	UINT Height = 1;
+	std::vector<std::uint8_t> Pixels = { 255, 255, 255, 255 };
+};
+
+bool LoadImageFromTga(const std::filesystem::path& imagePath, RgbaImage& outImage) {
+#pragma pack(push, 1)
+	struct TgaHeader {
+		std::uint8_t idLength;
+		std::uint8_t colorMapType;
+		std::uint8_t imageType;
+		std::uint16_t colorMapOrigin;
+		std::uint16_t colorMapLength;
+		std::uint8_t colorMapDepth;
+		std::uint16_t xOrigin;
+		std::uint16_t yOrigin;
+		std::uint16_t width;
+		std::uint16_t height;
+		std::uint8_t pixelDepth;
+		std::uint8_t imageDescriptor;
+	};
+#pragma pack(pop)
+
+	std::ifstream file(imagePath, std::ios::binary);
+	if (!file) {
+		return false;
+	}
+
+	TgaHeader hdr = {};
+	file.read(reinterpret_cast<char*>(&hdr), sizeof(hdr));
+	if (!file) {
+		return false;
+	}
+
+	if (hdr.colorMapType != 0) {
+		return false;
+	}
+	if (hdr.width == 0 || hdr.height == 0) {
+		return false;
+	}
+	if (hdr.pixelDepth != 24 && hdr.pixelDepth != 32) {
+		return false;
+	}
+	if (hdr.imageType != 2 && hdr.imageType != 10) {
+		return false;
+	}
+
+	if (hdr.idLength > 0) {
+		file.seekg(hdr.idLength, std::ios::cur);
+		if (!file) {
+			return false;
+		}
+	}
+
+	const UINT width = hdr.width;
+	const UINT height = hdr.height;
+	const size_t bytesPerPixel = hdr.pixelDepth / 8;
+	const size_t pixelCount = static_cast<size_t>(width) * static_cast<size_t>(height);
+
+	std::vector<std::uint8_t> srcData(pixelCount * bytesPerPixel);
+
+	if (hdr.imageType == 2)
+	{
+		file.read(reinterpret_cast<char*>(srcData.data()), static_cast<std::streamsize>(srcData.size()));
+		if (!file) {
+			return false;
+		}
+	}
+	else
+	{
+		size_t outPixel = 0;
+		while (outPixel < pixelCount && file)
+		{
+			std::uint8_t packetHeader = 0;
+			file.read(reinterpret_cast<char*>(&packetHeader), 1);
+			if (!file) {
+				return false;
+			}
+
+			const size_t runLength = static_cast<size_t>(packetHeader & 0x7F) + 1;
+			if (runLength == 0 || outPixel + runLength > pixelCount) {
+				return false;
+			}
+
+			if (packetHeader & 0x80)
+			{
+				std::array<std::uint8_t, 4> px = {};
+				file.read(reinterpret_cast<char*>(px.data()), static_cast<std::streamsize>(bytesPerPixel));
+				if (!file) {
+					return false;
+				}
+
+				for (size_t i = 0; i < runLength; ++i)
+				{
+					memcpy(srcData.data() + (outPixel + i) * bytesPerPixel, px.data(), bytesPerPixel);
+				}
+			}
+			else
+			{
+				const size_t bytesToRead = runLength * bytesPerPixel;
+				file.read(
+					reinterpret_cast<char*>(srcData.data() + outPixel * bytesPerPixel),
+					static_cast<std::streamsize>(bytesToRead));
+				if (!file) {
+					return false;
+				}
+			}
+
+			outPixel += runLength;
+		}
+
+		if (outPixel != pixelCount) {
+			return false;
+		}
+	}
+
+	outImage.Width = width;
+	outImage.Height = height;
+	outImage.Pixels.resize(pixelCount * 4);
+
+	const bool originTop = (hdr.imageDescriptor & 0x20) != 0;
+	const bool originRight = (hdr.imageDescriptor & 0x10) != 0;
+
+	for (UINT y = 0; y < height; ++y)
+	{
+		const UINT srcY = originTop ? y : (height - 1 - y);
+		for (UINT x = 0; x < width; ++x)
+		{
+			const UINT srcX = originRight ? (width - 1 - x) : x;
+			const size_t srcPixel = static_cast<size_t>(srcY) * width + srcX;
+			const size_t srcIndex = srcPixel * bytesPerPixel;
+
+			const size_t dstPixel = static_cast<size_t>(y) * width + x;
+			const size_t dstIndex = dstPixel * 4;
+
+			outImage.Pixels[dstIndex + 0] = srcData[srcIndex + 2];
+			outImage.Pixels[dstIndex + 1] = srcData[srcIndex + 1];
+			outImage.Pixels[dstIndex + 2] = srcData[srcIndex + 0];
+			outImage.Pixels[dstIndex + 3] = (bytesPerPixel == 4) ? srcData[srcIndex + 3] : 255;
+		}
+	}
+
+	return true;
+}
+
+bool LoadImageFromFileWic(const std::filesystem::path& imagePath, RgbaImage& outImage) {
+	ComPtr<IWICImagingFactory> factory;
+	HRESULT hr = CoCreateInstance(
+		CLSID_WICImagingFactory,
+		nullptr,
+		CLSCTX_INPROC_SERVER,
+		IID_PPV_ARGS(&factory));
+	if (FAILED(hr)) {
+		return false;
+	}
+
+	ComPtr<IWICBitmapDecoder> decoder;
+	hr = factory->CreateDecoderFromFilename(
+		imagePath.wstring().c_str(),
+		nullptr,
+		GENERIC_READ,
+		WICDecodeMetadataCacheOnLoad,
+		&decoder);
+	if (FAILED(hr)) {
+		return false;
+	}
+
+	ComPtr<IWICBitmapFrameDecode> frame;
+	hr = decoder->GetFrame(0, &frame);
+	if (FAILED(hr)) {
+		return false;
+	}
+
+	ComPtr<IWICFormatConverter> converter;
+	hr = factory->CreateFormatConverter(&converter);
+	if (FAILED(hr)) {
+		return false;
+	}
+
+	hr = converter->Initialize(
+		frame.Get(),
+		GUID_WICPixelFormat32bppRGBA,
+		WICBitmapDitherTypeNone,
+		nullptr,
+		0.0f,
+		WICBitmapPaletteTypeCustom);
+	if (FAILED(hr)) {
+		return false;
+	}
+
+	UINT width = 0;
+	UINT height = 0;
+	hr = converter->GetSize(&width, &height);
+	if (FAILED(hr) || width == 0 || height == 0) {
+		return false;
+	}
+
+	const UINT rowPitch = width * 4;
+	outImage.Width = width;
+	outImage.Height = height;
+	outImage.Pixels.resize(static_cast<size_t>(rowPitch) * static_cast<size_t>(height));
+
+	hr = converter->CopyPixels(nullptr, rowPitch, static_cast<UINT>(outImage.Pixels.size()), outImage.Pixels.data());
+	if (FAILED(hr)) {
+		return false;
+	}
+
+	return true;
+}
+
+bool LoadImageFromFile(const std::filesystem::path& imagePath, RgbaImage& outImage)
+{
+	if (LoadImageFromFileWic(imagePath, outImage)) {
+		return true;
+	}
+
+	std::wstring ext = imagePath.extension().wstring();
+	std::transform(ext.begin(), ext.end(), ext.begin(), [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
+
+	if (ext == L".tga") {
+		return LoadImageFromTga(imagePath, outImage);
+	}
+
+	return false;
+}
+} // namespace
 
 Framework::Framework(int width, int height, const wchar_t* title)
 	: m_initWidth(width)
@@ -38,9 +272,22 @@ Framework::~Framework() {
 		CloseHandle(m_fenceEvent);
 		m_fenceEvent = nullptr;
 	}
+
+	if (m_comInitialized) {
+		CoUninitialize();
+		m_comInitialized = false;
+	}
 }
 
 bool Framework::Init() {
+	const HRESULT coHr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+	if (SUCCEEDED(coHr)) {
+		m_comInitialized = true;
+	}
+	else if (coHr != RPC_E_CHANGED_MODE) {
+		ThrowIfFailed(coHr);
+	}
+
 	m_window = std::make_unique<Window>(m_initWidth, m_initHeight, m_title, this);
 
 	InitDxgi();
@@ -52,12 +299,12 @@ bool Framework::Init() {
 	CreateRtvAndDsvDescriptorHeaps();
 	BuildShaders();
 	BuildConstantBuffers();
+	BuildBoxGeometry();
+	BuildObjVB_Upload();
 	BuildCbvHeap();
 	BuildCbvViews();
 	BuildRootSignature();
 	BuildPSO();
-	BuildBoxGeometry();
-	BuildObjVB_Upload();
 
 	OnResize();
 
@@ -191,7 +438,7 @@ LRESULT Framework::MsgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 		return 0;
 	}
 
-	// чтобы при потере фокуса не было "залипших" клавиш
+	// С‡С‚РѕР±С‹ РїСЂРё РїРѕС‚РµСЂРµ С„РѕРєСѓСЃР° РЅРµ Р±С‹Р»Рѕ "Р·Р°Р»РёРїС€РёС…" РєР»Р°РІРёС€
 	case WM_KILLFOCUS:
 	{
 		m_keyDown.fill(false);
@@ -312,6 +559,12 @@ void Framework::OnResize()
 
 void Framework::Update(const double& dt)
 {
+	m_uvAnimation.x += m_uvAnimationSpeed.x * static_cast<float>(dt);
+	m_uvAnimation.y += m_uvAnimationSpeed.y * static_cast<float>(dt);
+
+	m_uvAnimation.x -= std::floor(m_uvAnimation.x);
+	m_uvAnimation.y -= std::floor(m_uvAnimation.y);
+
 	ObjectConstants obj = {};
 	XMMATRIX world =
 		XMMatrixTranslation(-m_modelCenter.x, -m_modelCenter.y, -m_modelCenter.z) *
@@ -370,6 +623,8 @@ void Framework::Update(const double& dt)
 	pass.Diffuse = { 1.0f, 1.0f, 1.0f, 1.0f };
 	pass.Specular = { 1.0f, 1.0f, 1.0f, 1.0f };
 	pass.SpecPower = 32.0f;
+	pass.UvScroll = m_uvAnimation;
+	pass.UvTiling = m_uvGlobalTiling;
 
 	m_passCB->CopyData(0, pass);
 }
@@ -400,6 +655,29 @@ void Framework::Draw()
 		m_cbvHeap->GetGPUDescriptorHandleForHeapStart()
 	);
 
+	auto BindMaterial = [&](const Framework::ModelMaterial& srcMaterial) {
+		MaterialConstants mat = {};
+		mat.DiffuseAlbedo = srcMaterial.DiffuseAlbedo;
+		mat.UvTilingOffset = {
+			srcMaterial.UvTiling.x,
+			srcMaterial.UvTiling.y,
+			srcMaterial.UvOffset.x,
+			srcMaterial.UvOffset.y
+		};
+		mat.HasTexture = srcMaterial.HasTexture ? 1u : 0u;
+
+		m_commandList->SetGraphicsRoot32BitConstants(
+			1,
+			static_cast<UINT>(sizeof(MaterialConstants) / sizeof(UINT32)),
+			&mat,
+			0);
+
+		D3D12_GPU_DESCRIPTOR_HANDLE textureHandle = m_cbvHeap->GetGPUDescriptorHandleForHeapStart();
+		const UINT textureIndex = srcMaterial.TextureIndex;
+		textureHandle.ptr += static_cast<SIZE_T>(2 + textureIndex) * m_cbvSrvUavDescriptorSize;
+		m_commandList->SetGraphicsRootDescriptorTable(2, textureHandle);
+	};
+
 	D3D12_CPU_DESCRIPTOR_HANDLE rtv = CurrentBackBufferView();
 	D3D12_CPU_DESCRIPTOR_HANDLE dsv = DepthStencilView();
 	m_commandList->OMSetRenderTargets(1, &rtv, TRUE, &dsv);
@@ -416,14 +694,22 @@ void Framework::Draw()
 
 	m_commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-	if (m_modelVB && m_modelVertexCount > 0)
+	if (m_modelVB && !m_modelSubsets.empty())
 	{
 		m_commandList->IASetVertexBuffers(0, 1, &m_modelVBV);
-		m_commandList->DrawInstanced(m_modelVertexCount, 1, 0, 0);
+
+		for (const ModelSubset& subset : m_modelSubsets)
+		{
+			const UINT materialIndex = (subset.MaterialIndex < m_modelMaterials.size()) ? subset.MaterialIndex : 0;
+			const ModelMaterial& material = m_modelMaterials[materialIndex];
+
+			BindMaterial(material);
+			m_commandList->DrawInstanced(subset.VertexCount, 1, subset.StartVertex, 0);
+		}
 	}
 	else
 	{
-		// fallback: куб (если OBJ не загрузился)
+		BindMaterial(ModelMaterial{});
 		m_commandList->IASetVertexBuffers(0, 1, &m_boxVBView);
 		m_commandList->IASetIndexBuffer(&m_boxIBView);
 		m_commandList->DrawIndexedInstanced(m_boxIndexCount, 1, 0, 0, 0);
@@ -690,7 +976,8 @@ void Framework::BuildConstantBuffers()
 void Framework::BuildCbvHeap()
 {
 	D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
-	heapDesc.NumDescriptors = 2;
+	const UINT textureCount = std::max<UINT>(1u, static_cast<UINT>(m_textureResources.size()));
+	heapDesc.NumDescriptors = 2 + textureCount;
 	heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
 	heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
 
@@ -717,6 +1004,31 @@ void Framework::BuildCbvViews()
 		h.ptr += (SIZE_T)m_cbvSrvUavDescriptorSize;
 		m_device->CreateConstantBufferView(&cbvDesc, h);
 	}
+
+	if (!m_textureResources.empty())
+	{
+		D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+		srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+		srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+		srvDesc.Texture2D.MostDetailedMip = 0;
+		srvDesc.Texture2D.MipLevels = 1;
+		srvDesc.Texture2D.PlaneSlice = 0;
+		srvDesc.Texture2D.ResourceMinLODClamp = 0.0f;
+
+		for (UINT i = 0; i < static_cast<UINT>(m_textureResources.size()); ++i)
+		{
+			ID3D12Resource* texture = m_textureResources[i].Get();
+			if (!texture) {
+				continue;
+			}
+
+			srvDesc.Format = texture->GetDesc().Format;
+
+			D3D12_CPU_DESCRIPTOR_HANDLE h = m_cbvHeap->GetCPUDescriptorHandleForHeapStart();
+			h.ptr += static_cast<SIZE_T>(2 + i) * m_cbvSrvUavDescriptorSize;
+			m_device->CreateShaderResourceView(texture, &srvDesc, h);
+		}
+	}
 }
 
 void Framework::BuildRootSignature()
@@ -728,17 +1040,51 @@ void Framework::BuildRootSignature()
 	cbvRange.RegisterSpace = 0;
 	cbvRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-	D3D12_ROOT_PARAMETER rootParam = {};
-	rootParam.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-	rootParam.DescriptorTable.NumDescriptorRanges = 1;
-	rootParam.DescriptorTable.pDescriptorRanges = &cbvRange;
-	rootParam.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+	D3D12_DESCRIPTOR_RANGE srvRange = {};
+	srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+	srvRange.NumDescriptors = 1;
+	srvRange.BaseShaderRegister = 0;
+	srvRange.RegisterSpace = 0;
+	srvRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+	D3D12_ROOT_PARAMETER rootParams[3] = {};
+
+	rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+	rootParams[0].DescriptorTable.NumDescriptorRanges = 1;
+	rootParams[0].DescriptorTable.pDescriptorRanges = &cbvRange;
+	rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+	rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+	rootParams[1].Constants.ShaderRegister = 2;
+	rootParams[1].Constants.RegisterSpace = 0;
+	rootParams[1].Constants.Num32BitValues = static_cast<UINT>(sizeof(MaterialConstants) / sizeof(UINT32));
+	rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+	rootParams[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+	rootParams[2].DescriptorTable.NumDescriptorRanges = 1;
+	rootParams[2].DescriptorTable.pDescriptorRanges = &srvRange;
+	rootParams[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+	D3D12_STATIC_SAMPLER_DESC sampler = {};
+	sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+	sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+	sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+	sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+	sampler.MipLODBias = 0.0f;
+	sampler.MaxAnisotropy = 1;
+	sampler.ComparisonFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+	sampler.BorderColor = D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE;
+	sampler.MinLOD = 0.0f;
+	sampler.MaxLOD = D3D12_FLOAT32_MAX;
+	sampler.ShaderRegister = 0;
+	sampler.RegisterSpace = 0;
+	sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
 	D3D12_ROOT_SIGNATURE_DESC rootSigDesc = {};
-	rootSigDesc.NumParameters = 1;
-	rootSigDesc.pParameters = &rootParam;
-	rootSigDesc.NumStaticSamplers = 0;
-	rootSigDesc.pStaticSamplers = nullptr;
+	rootSigDesc.NumParameters = _countof(rootParams);
+	rootSigDesc.pParameters = rootParams;
+	rootSigDesc.NumStaticSamplers = 1;
+	rootSigDesc.pStaticSamplers = &sampler;
 	rootSigDesc.Flags =
 		D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT |
 		D3D12_ROOT_SIGNATURE_FLAG_DENY_HULL_SHADER_ROOT_ACCESS |
@@ -777,6 +1123,9 @@ void Framework::BuildPSO()
 		  D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
 
 		{ "COLOR",    0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 24,
+		  D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+
+		{ "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 40,
 		  D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
 	};
 
@@ -1014,301 +1363,409 @@ void Framework::BuildBoxGeometry()
 	m_boxIBUpload.Reset();
 }
 
-static void LoadObjAsTriangleList(
-	const std::wstring& objPathW,
-	std::vector<Vertex>& outVertices)
-{
-	using namespace DirectX;
-
-	std::string objPath(objPathW.begin(), objPathW.end());
-
-	tinyobj::attrib_t attrib;
-	std::vector<tinyobj::shape_t> shapes;
-	std::vector<tinyobj::material_t> materials;
-	std::string warn, err;
-
-	std::filesystem::path p(objPath);
-	std::string baseDir = p.parent_path().string();
-	if (!baseDir.empty() && baseDir.back() != '/' && baseDir.back() != '\\')
-		baseDir += "/";
-
-	bool ok = tinyobj::LoadObj(
-		&attrib, &shapes, &materials,
-		&warn, &err,
-		objPath.c_str(), baseDir.c_str(),
-		true);
-
-	if (!warn.empty())
-		OutputDebugStringA((std::string("tinyobj warn: ") + warn + "\n").c_str());
-
-	if (!ok)
-		throw std::runtime_error("tinyobj error: " + err);
-
-	outVertices.clear();
-
-	const bool hasNormals = !attrib.normals.empty();
-
-	for (const auto& shape : shapes)
-	{
-		size_t indexOffset = 0;
-
-		for (size_t f = 0; f < shape.mesh.num_face_vertices.size(); f++)
-		{
-			int fv = shape.mesh.num_face_vertices[f];
-			if (fv != 3) { indexOffset += fv; continue; }
-
-			Vertex tri[3]{};
-
-			for (int v = 0; v < 3; v++)
-			{
-				tinyobj::index_t idx = shape.mesh.indices[indexOffset + v];
-
-				tri[v].Pos = {
-					attrib.vertices[3 * idx.vertex_index + 0],
-					attrib.vertices[3 * idx.vertex_index + 1],
-					attrib.vertices[3 * idx.vertex_index + 2]
-				};
-
-				if (hasNormals && idx.normal_index >= 0)
-				{
-					tri[v].Normal = {
-						attrib.normals[3 * idx.normal_index + 0],
-						attrib.normals[3 * idx.normal_index + 1],
-						attrib.normals[3 * idx.normal_index + 2]
-					};
-				}
-				else
-				{
-					tri[v].Normal = { 0,0,0 };
-				}
-			}
-
-			if (!hasNormals)
-			{
-				XMVECTOR A = XMLoadFloat3(&tri[0].Pos);
-				XMVECTOR B = XMLoadFloat3(&tri[1].Pos);
-				XMVECTOR C = XMLoadFloat3(&tri[2].Pos);
-
-				XMVECTOR N = XMVector3Normalize(XMVector3Cross(B - A, C - A));
-				XMFLOAT3 n;
-				XMStoreFloat3(&n, N);
-
-				tri[0].Normal = n;
-				tri[1].Normal = n;
-				tri[2].Normal = n;
-			}
-
-			outVertices.push_back(tri[0]);
-			outVertices.push_back(tri[1]);
-			outVertices.push_back(tri[2]);
-
-			indexOffset += 3;
-		}
-	}
-}
-
 void Framework::BuildObjVB_Upload()
 {
 	using namespace DirectX;
 
-	// ---------- 0) Путь к OBJ ----------
-	const std::wstring objPathW = L"assets\\sponza.obj";
+	const std::filesystem::path objPath = std::filesystem::path(L"assets") / L"sponza.obj";
+	const std::string objPathUtf8 = objPath.u8string();
+	const std::string baseDirUtf8 = objPath.parent_path().u8string();
 
-	auto WideToUtf8 = [](const std::wstring& w) -> std::string
-		{
-			if (w.empty()) return {};
-			int size = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, nullptr, 0, nullptr, nullptr);
-			std::string s((size > 0) ? (size - 1) : 0, '\0');
-			if (size > 1)
-				WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, s.data(), size, nullptr, nullptr);
-			return s;
-		};
-
-	std::string objPath = WideToUtf8(objPathW);
-
-	// baseDir нужен, чтобы подхватились .mtl и текстуры (если будут)
-	std::string baseDir;
-	{
-		std::wstring dirW = objPathW;
-		size_t pos = dirW.find_last_of(L"\\/");
-
-		if (pos != std::wstring::npos)
-			dirW = dirW.substr(0, pos + 1);
-		else
-			dirW = L"";
-
-		baseDir = WideToUtf8(dirW);
-	}
-
-	// ---------- 1) tinyobj LoadObj ----------
 	tinyobj::attrib_t attrib;
 	std::vector<tinyobj::shape_t> shapes;
-	std::vector<tinyobj::material_t> materials;
+	std::vector<tinyobj::material_t> tinyMaterials;
 	std::string warn, err;
 
 	bool ok = tinyobj::LoadObj(
-		&attrib, &shapes, &materials,
+		&attrib, &shapes, &tinyMaterials,
 		&warn, &err,
-		objPath.c_str(),
-		baseDir.empty() ? nullptr : baseDir.c_str(),
-		/*triangulate*/ true);
+		objPathUtf8.c_str(),
+		baseDirUtf8.empty() ? nullptr : baseDirUtf8.c_str(),
+		true);
 
 	if (!warn.empty())
 		OutputDebugStringA(("[tinyobj warn] " + warn + "\n").c_str());
 	if (!err.empty())
 		OutputDebugStringA(("[tinyobj err ] " + err + "\n").c_str());
 
-	if (!ok)
+	if (!ok) {
 		throw std::runtime_error("tinyobj::LoadObj failed (see Output window).");
+	}
 
-	// ---------- 2) Разворачиваем в triangle list Vertex[] ----------
-	std::vector<Vertex> vertices;
-	vertices.reserve(500000);
+	m_modelMaterials.clear();
+	m_modelSubsets.clear();
+	m_textureResources.clear();
+	m_textureUploadResources.clear();
+	m_modelVB.Reset();
+	m_modelVBUpload.Reset();
+	m_modelVertexCount = 0;
+
+	std::vector<RgbaImage> textureImages;
+	textureImages.reserve(32);
+	textureImages.push_back(RgbaImage{});
+
+	std::unordered_map<std::wstring, UINT> textureIndexByPath;
+	textureIndexByPath.reserve(64);
+
+	ModelMaterial defaultMaterial = {};
+	defaultMaterial.HasTexture = true;
+	defaultMaterial.TextureIndex = 0;
+	m_modelMaterials.push_back(defaultMaterial);
+
+	for (const tinyobj::material_t& srcMaterial : tinyMaterials)
+	{
+		ModelMaterial mat = {};
+		mat.DiffuseAlbedo = {
+			static_cast<float>(srcMaterial.diffuse[0]),
+			static_cast<float>(srcMaterial.diffuse[1]),
+			static_cast<float>(srcMaterial.diffuse[2]),
+			static_cast<float>(srcMaterial.dissolve > 0.0f ? srcMaterial.dissolve : 1.0f)
+		};
+
+		float uScale = static_cast<float>(srcMaterial.diffuse_texopt.scale[0]);
+		float vScale = static_cast<float>(srcMaterial.diffuse_texopt.scale[1]);
+		if (std::fabs(uScale) < 1e-6f) uScale = 1.0f;
+		if (std::fabs(vScale) < 1e-6f) vScale = 1.0f;
+
+		mat.UvTiling = { uScale, vScale };
+		mat.UvOffset = {
+			static_cast<float>(srcMaterial.diffuse_texopt.origin_offset[0]),
+			static_cast<float>(srcMaterial.diffuse_texopt.origin_offset[1])
+		};
+		mat.HasTexture = false;
+		mat.TextureIndex = 0;
+
+		if (!srcMaterial.diffuse_texname.empty())
+		{
+			std::filesystem::path texturePath = std::filesystem::u8path(srcMaterial.diffuse_texname);
+			if (!texturePath.is_absolute()) {
+				texturePath = objPath.parent_path() / texturePath;
+			}
+			texturePath = texturePath.lexically_normal();
+
+			const std::wstring key = texturePath.wstring();
+			auto existing = textureIndexByPath.find(key);
+			if (existing != textureIndexByPath.end()) {
+				mat.TextureIndex = existing->second;
+				mat.HasTexture = true;
+			}
+			else {
+				RgbaImage loadedImage;
+				if (LoadImageFromFile(texturePath, loadedImage)) {
+					const UINT textureIndex = static_cast<UINT>(textureImages.size());
+					textureImages.push_back(std::move(loadedImage));
+					textureIndexByPath.emplace(key, textureIndex);
+
+					mat.TextureIndex = textureIndex;
+					mat.HasTexture = true;
+				}
+				else {
+					std::wstring warnLine = L"[Texture] Failed to load: ";
+					warnLine += texturePath.wstring();
+					warnLine += L"\n";
+					OutputDebugStringW(warnLine.c_str());
+				}
+			}
+		}
+
+		m_modelMaterials.push_back(mat);
+	}
 
 	const bool hasNormals = !attrib.normals.empty();
+	const bool hasTexcoords = !attrib.texcoords.empty();
 
-	// bounds (без std::min/std::max)
 	XMFLOAT3 minP = { +FLT_MAX, +FLT_MAX, +FLT_MAX };
 	XMFLOAT3 maxP = { -FLT_MAX, -FLT_MAX, -FLT_MAX };
+	auto ExpandBounds = [&](const XMFLOAT3& p) {
+		if (p.x < minP.x) minP.x = p.x;
+		if (p.y < minP.y) minP.y = p.y;
+		if (p.z < minP.z) minP.z = p.z;
+		if (p.x > maxP.x) maxP.x = p.x;
+		if (p.y > maxP.y) maxP.y = p.y;
+		if (p.z > maxP.z) maxP.z = p.z;
+	};
 
-	auto ExpandBounds = [&](const XMFLOAT3& p)
-		{
-			if (p.x < minP.x) minP.x = p.x;
-			if (p.y < minP.y) minP.y = p.y;
-			if (p.z < minP.z) minP.z = p.z;
-
-			if (p.x > maxP.x) maxP.x = p.x;
-			if (p.y > maxP.y) maxP.y = p.y;
-			if (p.z > maxP.z) maxP.z = p.z;
+	auto ReadPos = [&](int vIdx) -> XMFLOAT3 {
+		if (vIdx < 0) {
+			return { 0.0f, 0.0f, 0.0f };
+		}
+		const size_t i = static_cast<size_t>(vIdx);
+		return {
+			attrib.vertices[3 * i + 0],
+			attrib.vertices[3 * i + 1],
+			attrib.vertices[3 * i + 2]
 		};
+	};
 
-	auto ReadPos = [&](int vIdx) -> XMFLOAT3
-		{
-			XMFLOAT3 p = { 0,0,0 };
-			if (vIdx >= 0)
-			{
-				p.x = attrib.vertices[3 * (size_t)vIdx + 0];
-				p.y = attrib.vertices[3 * (size_t)vIdx + 1];
-				p.z = attrib.vertices[3 * (size_t)vIdx + 2];
-			}
-			return p;
+	auto ReadNormal = [&](int nIdx) -> XMFLOAT3 {
+		if (!hasNormals || nIdx < 0) {
+			return { 0.0f, 1.0f, 0.0f };
+		}
+		const size_t i = static_cast<size_t>(nIdx);
+		return {
+			attrib.normals[3 * i + 0],
+			attrib.normals[3 * i + 1],
+			attrib.normals[3 * i + 2]
 		};
+	};
 
-	auto ReadNrm = [&](int nIdx) -> XMFLOAT3
-		{
-			XMFLOAT3 n = { 0,1,0 };
-			if (hasNormals && nIdx >= 0)
-			{
-				n.x = attrib.normals[3 * (size_t)nIdx + 0];
-				n.y = attrib.normals[3 * (size_t)nIdx + 1];
-				n.z = attrib.normals[3 * (size_t)nIdx + 2];
-			}
-			return n;
+	auto ReadTexCoord = [&](int tIdx) -> XMFLOAT2 {
+		if (!hasTexcoords || tIdx < 0) {
+			return { 0.0f, 0.0f };
+		}
+		const size_t i = static_cast<size_t>(tIdx);
+		return {
+			attrib.texcoords[2 * i + 0],
+			1.0f - attrib.texcoords[2 * i + 1]
 		};
+	};
 
-	for (const auto& sh : shapes)
+	std::vector<std::vector<Vertex>> materialVertices(m_modelMaterials.size());
+
+	for (const tinyobj::shape_t& shape : shapes)
 	{
 		size_t indexOffset = 0;
-
-		for (size_t f = 0; f < sh.mesh.num_face_vertices.size(); f++)
+		for (size_t f = 0; f < shape.mesh.num_face_vertices.size(); ++f)
 		{
-			int fv = sh.mesh.num_face_vertices[f];
-			if (fv != 3)
-			{
-				indexOffset += (size_t)fv;
+			const int fv = shape.mesh.num_face_vertices[f];
+			if (fv != 3) {
+				indexOffset += static_cast<size_t>(fv);
 				continue;
 			}
 
-			tinyobj::index_t i0 = sh.mesh.indices[indexOffset + 0];
-			tinyobj::index_t i1 = sh.mesh.indices[indexOffset + 1];
-			tinyobj::index_t i2 = sh.mesh.indices[indexOffset + 2];
-
-			XMFLOAT3 p0 = ReadPos(i0.vertex_index);
-			XMFLOAT3 p1 = ReadPos(i1.vertex_index);
-			XMFLOAT3 p2 = ReadPos(i2.vertex_index);
-
-			XMFLOAT3 n0 = ReadNrm(i0.normal_index);
-			XMFLOAT3 n1 = ReadNrm(i1.normal_index);
-			XMFLOAT3 n2 = ReadNrm(i2.normal_index);
-
-			// Если нормалей нет — считаем face normal
-			if (!hasNormals || i0.normal_index < 0 || i1.normal_index < 0 || i2.normal_index < 0)
-			{
-				XMVECTOR A = XMLoadFloat3(&p0);
-				XMVECTOR B = XMLoadFloat3(&p1);
-				XMVECTOR C = XMLoadFloat3(&p2);
-				XMVECTOR fn = XMVector3Normalize(XMVector3Cross(B - A, C - A));
-				XMStoreFloat3(&n0, fn);
-				n1 = n0;
-				n2 = n0;
+			UINT materialIndex = 0;
+			if (f < shape.mesh.material_ids.size()) {
+				const int tinyMatId = shape.mesh.material_ids[f];
+				if (tinyMatId >= 0 && tinyMatId < static_cast<int>(tinyMaterials.size())) {
+					materialIndex = static_cast<UINT>(tinyMatId + 1);
+				}
+			}
+			if (materialIndex >= materialVertices.size()) {
+				materialIndex = 0;
 			}
 
-			// ВАЖНО: этот конструктор должен соответствовать твоему Vertex.
-			// Если у тебя Vertex без Color — убери третий параметр.
-			vertices.push_back(Vertex{ p0, n0, XMFLOAT4(1,1,1,1) });
-			vertices.push_back(Vertex{ p1, n1, XMFLOAT4(1,1,1,1) });
-			vertices.push_back(Vertex{ p2, n2, XMFLOAT4(1,1,1,1) });
+			Vertex tri[3] = {};
+			for (int v = 0; v < 3; ++v)
+			{
+				const tinyobj::index_t idx = shape.mesh.indices[indexOffset + static_cast<size_t>(v)];
+				tri[v].Pos = ReadPos(idx.vertex_index);
+				tri[v].Normal = ReadNormal(idx.normal_index);
+				tri[v].Color = { 1.0f, 1.0f, 1.0f, 1.0f };
+				tri[v].TexC = ReadTexCoord(idx.texcoord_index);
+			}
 
-			ExpandBounds(p0);
-			ExpandBounds(p1);
-			ExpandBounds(p2);
+			if (!hasNormals ||
+				shape.mesh.indices[indexOffset + 0].normal_index < 0 ||
+				shape.mesh.indices[indexOffset + 1].normal_index < 0 ||
+				shape.mesh.indices[indexOffset + 2].normal_index < 0)
+			{
+				const XMVECTOR a = XMLoadFloat3(&tri[0].Pos);
+				const XMVECTOR b = XMLoadFloat3(&tri[1].Pos);
+				const XMVECTOR c = XMLoadFloat3(&tri[2].Pos);
+				const XMVECTOR n = XMVector3Normalize(XMVector3Cross(b - a, c - a));
+				XMFLOAT3 normal;
+				XMStoreFloat3(&normal, n);
+				tri[0].Normal = normal;
+				tri[1].Normal = normal;
+				tri[2].Normal = normal;
+			}
+
+			materialVertices[materialIndex].push_back(tri[0]);
+			materialVertices[materialIndex].push_back(tri[1]);
+			materialVertices[materialIndex].push_back(tri[2]);
+
+			ExpandBounds(tri[0].Pos);
+			ExpandBounds(tri[1].Pos);
+			ExpandBounds(tri[2].Pos);
 
 			indexOffset += 3;
 		}
 	}
 
-	if (vertices.empty())
-		throw std::runtime_error("OBJ loaded but produced 0 vertices.");
-
-	// ---------- 3) Центр + масштаб (чтобы Sponza точно попала в кадр) ----------
-	m_modelCenter =
+	std::vector<Vertex> vertices;
+	vertices.reserve(500000);
+	for (UINT materialIndex = 0; materialIndex < static_cast<UINT>(materialVertices.size()); ++materialIndex)
 	{
+		const std::vector<Vertex>& bucket = materialVertices[materialIndex];
+		if (bucket.empty()) {
+			continue;
+		}
+
+		ModelSubset subset = {};
+		subset.MaterialIndex = materialIndex;
+		subset.StartVertex = static_cast<UINT>(vertices.size());
+		subset.VertexCount = static_cast<UINT>(bucket.size());
+		m_modelSubsets.push_back(subset);
+
+		vertices.insert(vertices.end(), bucket.begin(), bucket.end());
+	}
+
+	if (vertices.empty()) {
+		throw std::runtime_error("OBJ loaded but produced 0 vertices.");
+	}
+
+	m_modelCenter = {
 		0.5f * (minP.x + maxP.x),
 		0.5f * (minP.y + maxP.y),
 		0.5f * (minP.z + maxP.z)
 	};
 
-	float dx = (maxP.x - minP.x);
-	float dy = (maxP.y - minP.y);
-	float dz = (maxP.z - minP.z);
-
-	float maxDim = dx;
-	if (dy > maxDim) maxDim = dy;
-	if (dz > maxDim) maxDim = dz;
-
-	// Хотим, чтобы модель стала примерно "размером 2" (под твою камеру/near/far)
+	float maxDim = maxP.x - minP.x;
+	const float dimY = maxP.y - minP.y;
+	const float dimZ = maxP.z - minP.z;
+	if (dimY > maxDim) maxDim = dimY;
+	if (dimZ > maxDim) maxDim = dimZ;
 	m_modelScale = (maxDim > 1e-6f) ? (2.0f / maxDim) : 1.0f;
 
-	// ---------- 4) Создаём VertexBuffer в UPLOAD heap (самый простой вариант) ----------
-	m_modelVertexCount = (UINT)vertices.size();
-	const UINT vbByteSize = (UINT)(vertices.size() * sizeof(Vertex));
+	m_modelVertexCount = static_cast<UINT>(vertices.size());
+	const UINT vbByteSize = static_cast<UINT>(vertices.size() * sizeof(Vertex));
 
-	D3D12_RESOURCE_DESC vbDesc{};
-	vbDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-	vbDesc.Width = vbByteSize;
-	vbDesc.Height = 1;
-	vbDesc.DepthOrArraySize = 1;
-	vbDesc.MipLevels = 1;
-	vbDesc.Format = DXGI_FORMAT_UNKNOWN;
-	vbDesc.SampleDesc.Count = 1;
-	vbDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+	D3D12_HEAP_PROPERTIES defaultHeap = {};
+	defaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
+	D3D12_HEAP_PROPERTIES uploadHeap = {};
+	uploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
 
-	D3D12_HEAP_PROPERTIES heapProps{};
-	heapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
+	auto MakeBufferDesc = [](UINT64 byteSize) {
+		D3D12_RESOURCE_DESC desc = {};
+		desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+		desc.Width = byteSize;
+		desc.Height = 1;
+		desc.DepthOrArraySize = 1;
+		desc.MipLevels = 1;
+		desc.Format = DXGI_FORMAT_UNKNOWN;
+		desc.SampleDesc.Count = 1;
+		desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+		return desc;
+	};
+
+	ThrowIfFailed(m_directCmdListAlloc->Reset());
+	ThrowIfFailed(m_commandList->Reset(m_directCmdListAlloc.Get(), nullptr));
+
+	m_textureResources.reserve(textureImages.size());
+	m_textureUploadResources.reserve(textureImages.size());
+
+	for (size_t texIdx = 0; texIdx < textureImages.size(); ++texIdx)
+	{
+		const RgbaImage& image = textureImages[texIdx];
+
+		D3D12_RESOURCE_DESC textureDesc = {};
+		textureDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+		textureDesc.Width = image.Width;
+		textureDesc.Height = image.Height;
+		textureDesc.DepthOrArraySize = 1;
+		textureDesc.MipLevels = 1;
+		textureDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+		textureDesc.SampleDesc.Count = 1;
+		textureDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+
+		ComPtr<ID3D12Resource> texture;
+		ThrowIfFailed(m_device->CreateCommittedResource(
+			&defaultHeap,
+			D3D12_HEAP_FLAG_NONE,
+			&textureDesc,
+			D3D12_RESOURCE_STATE_COPY_DEST,
+			nullptr,
+			IID_PPV_ARGS(texture.GetAddressOf())));
+
+		D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint = {};
+		UINT numRows = 0;
+		UINT64 uploadSize = 0;
+		m_device->GetCopyableFootprints(
+			&textureDesc,
+			0,
+			1,
+			0,
+			&footprint,
+			&numRows,
+			nullptr,
+			&uploadSize);
+
+		ComPtr<ID3D12Resource> upload;
+		D3D12_RESOURCE_DESC uploadDesc = MakeBufferDesc(uploadSize);
+		ThrowIfFailed(m_device->CreateCommittedResource(
+			&uploadHeap,
+			D3D12_HEAP_FLAG_NONE,
+			&uploadDesc,
+			D3D12_RESOURCE_STATE_GENERIC_READ,
+			nullptr,
+			IID_PPV_ARGS(upload.GetAddressOf())));
+
+		void* mapped = nullptr;
+		ThrowIfFailed(upload->Map(0, nullptr, &mapped));
+		const UINT srcRowPitch = image.Width * 4;
+		for (UINT row = 0; row < numRows; ++row)
+		{
+			const std::uint8_t* src = image.Pixels.data() + static_cast<size_t>(row) * srcRowPitch;
+			std::uint8_t* dst = reinterpret_cast<std::uint8_t*>(mapped)
+				+ footprint.Offset
+				+ static_cast<size_t>(row) * footprint.Footprint.RowPitch;
+			memcpy(dst, src, srcRowPitch);
+		}
+		upload->Unmap(0, nullptr);
+
+		D3D12_TEXTURE_COPY_LOCATION dstLoc = {};
+		dstLoc.pResource = texture.Get();
+		dstLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+		dstLoc.SubresourceIndex = 0;
+
+		D3D12_TEXTURE_COPY_LOCATION srcLoc = {};
+		srcLoc.pResource = upload.Get();
+		srcLoc.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+		srcLoc.PlacedFootprint = footprint;
+
+		m_commandList->CopyTextureRegion(&dstLoc, 0, 0, 0, &srcLoc, nullptr);
+
+		D3D12_RESOURCE_BARRIER barrier = {};
+		barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+		barrier.Transition.pResource = texture.Get();
+		barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+		barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+		barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+		m_commandList->ResourceBarrier(1, &barrier);
+
+		m_textureResources.push_back(texture);
+		m_textureUploadResources.push_back(upload);
+	}
+
+	const D3D12_RESOURCE_DESC vbDesc = MakeBufferDesc(vbByteSize);
+	ThrowIfFailed(m_device->CreateCommittedResource(
+		&defaultHeap,
+		D3D12_HEAP_FLAG_NONE,
+		&vbDesc,
+		D3D12_RESOURCE_STATE_COPY_DEST,
+		nullptr,
+		IID_PPV_ARGS(m_modelVB.GetAddressOf())));
 
 	ThrowIfFailed(m_device->CreateCommittedResource(
-		&heapProps,
+		&uploadHeap,
 		D3D12_HEAP_FLAG_NONE,
 		&vbDesc,
 		D3D12_RESOURCE_STATE_GENERIC_READ,
 		nullptr,
-		IID_PPV_ARGS(m_modelVB.GetAddressOf())
-	));
+		IID_PPV_ARGS(m_modelVBUpload.GetAddressOf())));
 
-	void* mapped = nullptr;
-	ThrowIfFailed(m_modelVB->Map(0, nullptr, &mapped));
-	memcpy(mapped, vertices.data(), vbByteSize);
-	m_modelVB->Unmap(0, nullptr);
+	void* vbMapped = nullptr;
+	ThrowIfFailed(m_modelVBUpload->Map(0, nullptr, &vbMapped));
+	memcpy(vbMapped, vertices.data(), vbByteSize);
+	m_modelVBUpload->Unmap(0, nullptr);
+
+	m_commandList->CopyBufferRegion(m_modelVB.Get(), 0, m_modelVBUpload.Get(), 0, vbByteSize);
+
+	D3D12_RESOURCE_BARRIER vbBarrier = {};
+	vbBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+	vbBarrier.Transition.pResource = m_modelVB.Get();
+	vbBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+	vbBarrier.Transition.StateAfter = D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER;
+	vbBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+	m_commandList->ResourceBarrier(1, &vbBarrier);
+
+	ThrowIfFailed(m_commandList->Close());
+	ID3D12CommandList* cmdLists[] = { m_commandList.Get() };
+	m_commandQueue->ExecuteCommandLists(1, cmdLists);
+	FlushCommandQueue();
+
+	m_textureUploadResources.clear();
+	m_modelVBUpload.Reset();
 
 	m_modelVBV.BufferLocation = m_modelVB->GetGPUVirtualAddress();
 	m_modelVBV.StrideInBytes = sizeof(Vertex);
@@ -1323,10 +1780,10 @@ void Framework::OnMouseDown(HWND hwnd, WPARAM btnState, int x, int y)
 		m_lastMousePos.x = x;
 		m_lastMousePos.y = y;
 
-		// Захват мыши, чтобы события шли даже если вышли за окно
+		// Р—Р°С…РІР°С‚ РјС‹С€Рё, С‡С‚РѕР±С‹ СЃРѕР±С‹С‚РёСЏ С€Р»Рё РґР°Р¶Рµ РµСЃР»Рё РІС‹С€Р»Рё Р·Р° РѕРєРЅРѕ
 		SetCapture(hwnd);
 
-		// Опционально: скрыть курсор
+		// РћРїС†РёРѕРЅР°Р»СЊРЅРѕ: СЃРєСЂС‹С‚СЊ РєСѓСЂСЃРѕСЂ
 		// ShowCursor(FALSE);
 	}
 }
@@ -1340,7 +1797,7 @@ void Framework::OnMouseUp(HWND hwnd, WPARAM btnState, int x, int y)
 		m_rmbDown = false;
 		ReleaseCapture();
 
-		// Опционально вернуть курсор
+		// РћРїС†РёРѕРЅР°Р»СЊРЅРѕ РІРµСЂРЅСѓС‚СЊ РєСѓСЂСЃРѕСЂ
 		// ShowCursor(TRUE);
 	}
 }
@@ -1362,21 +1819,21 @@ void Framework::OnMouseMove(HWND hwnd,	WPARAM btnState, int x, int y)
 	m_lastMousePos.x = x;
 	m_lastMousePos.y = y;
 
-	// yaw: вправо -> положительный
+	// yaw: РІРїСЂР°РІРѕ -> РїРѕР»РѕР¶РёС‚РµР»СЊРЅС‹Р№
 	m_yaw += dx * m_mouseSensitivity;
 
-	// pitch: вверх обычно уменьшает y (dy отрицательный),
-	// поэтому делаем "-" чтобы вверх => положительный pitch
+	// pitch: РІРІРµСЂС… РѕР±С‹С‡РЅРѕ СѓРјРµРЅСЊС€Р°РµС‚ y (dy РѕС‚СЂРёС†Р°С‚РµР»СЊРЅС‹Р№),
+	// РїРѕСЌС‚РѕРјСѓ РґРµР»Р°РµРј "-" С‡С‚РѕР±С‹ РІРІРµСЂС… => РїРѕР»РѕР¶РёС‚РµР»СЊРЅС‹Р№ pitch
 	m_pitch -= dy * m_mouseSensitivity;
 
-	// Ограничим pitch, чтобы не переворачивалась камера
-	const float limit = DirectX::XM_PIDIV2 - 0.1f; // ~ 89°
+	// РћРіСЂР°РЅРёС‡РёРј pitch, С‡С‚РѕР±С‹ РЅРµ РїРµСЂРµРІРѕСЂР°С‡РёРІР°Р»Р°СЃСЊ РєР°РјРµСЂР°
+	const float limit = DirectX::XM_PIDIV2 - 0.1f; // ~ 89В°
 	if (m_pitch > limit) m_pitch = limit;
 	if (m_pitch < -limit) m_pitch = -limit;
 
 	using namespace DirectX;
 
-	// Вектор "вперёд" из yaw/pitch (LH система)
+	// Р’РµРєС‚РѕСЂ "РІРїРµСЂС‘Рґ" РёР· yaw/pitch (LH СЃРёСЃС‚РµРјР°)
 	XMVECTOR forward = XMVectorSet(
 		cosf(m_pitch) * sinf(m_yaw),
 		sinf(m_pitch),
@@ -1390,3 +1847,4 @@ void Framework::OnMouseMove(HWND hwnd,	WPARAM btnState, int x, int y)
 
 	XMStoreFloat3(&m_camTarget, tgt);
 }
+

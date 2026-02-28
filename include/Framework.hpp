@@ -1,9 +1,11 @@
-#ifndef FRAMEWORK_HPP
+п»ї#ifndef FRAMEWORK_HPP
 #define FRAMEWORK_HPP
 
 #include <array>
 #include <string>
 #include <memory>
+#include <vector>
+#include <cstdint>
 #include <Windows.h>
 #include <windowsx.h>
 #include "Window.hpp"
@@ -131,16 +133,39 @@ private:
 	D3D12_INDEX_BUFFER_VIEW  m_boxIBView = {};
 
 	UINT m_boxIndexCount = 0;
-	
+
+	struct ModelMaterial {
+		DirectX::XMFLOAT4 DiffuseAlbedo = { 1.0f, 1.0f, 1.0f, 1.0f };
+		DirectX::XMFLOAT2 UvTiling = { 1.0f, 1.0f };
+		DirectX::XMFLOAT2 UvOffset = { 0.0f, 0.0f };
+		bool HasTexture = false;
+		UINT TextureIndex = 0;
+	};
+
+	struct ModelSubset {
+		UINT StartVertex = 0;
+		UINT VertexCount = 0;
+		UINT MaterialIndex = 0;
+	};
+
 	Microsoft::WRL::ComPtr<ID3D12Resource> m_modelVB;
+	Microsoft::WRL::ComPtr<ID3D12Resource> m_modelVBUpload;
 	D3D12_VERTEX_BUFFER_VIEW m_modelVBV{};
 	UINT m_modelVertexCount = 0;
+	std::vector<ModelSubset> m_modelSubsets;
+	std::vector<ModelMaterial> m_modelMaterials;
+
+	std::vector<ComPtr<ID3D12Resource>> m_textureResources;
+	std::vector<ComPtr<ID3D12Resource>> m_textureUploadResources;
 
 	DirectX::XMFLOAT3 m_modelCenter = { 0.0f, 0.0f, 0.0f };
 	float m_modelScale = 1.0f;
-	std::array<bool, 256> m_keyDown{}; // состояние VK_*
+	DirectX::XMFLOAT2 m_uvAnimation = { 0.0f, 0.0f };
+	DirectX::XMFLOAT2 m_uvAnimationSpeed = { 0.08f, 0.0f };
+	DirectX::XMFLOAT2 m_uvGlobalTiling = { 1.0f, 1.0f };
+	std::array<bool, 256> m_keyDown{}; // СЃРѕСЃС‚РѕСЏРЅРёРµ VK_*
 
-	float m_cameraMoveSpeed = 3.0f;   // units/sec, подстрой под сцену
+	float m_cameraMoveSpeed = 3.0f;   // units/sec, РїРѕРґСЃС‚СЂРѕР№ РїРѕРґ СЃС†РµРЅСѓ
 
 	DirectX::XMFLOAT3 m_camPos = { 2.0f, 2.0f, -5.0f };
 	DirectX::XMFLOAT3 m_camTarget = { 0.0f, 0.0f,  0.0f };
@@ -149,15 +174,17 @@ private:
 	// --- Mouse look state ---
 	bool  m_rmbDown = false;
 
-	// углы камеры
-	float m_yaw = 0.0f;   // поворот вокруг Y
-	float m_pitch = 0.0f;   // наклон вверх/вниз
+	// СѓРіР»С‹ РєР°РјРµСЂС‹
+	float m_yaw = 0.0f;   // РїРѕРІРѕСЂРѕС‚ РІРѕРєСЂСѓРі Y
+	float m_pitch = 0.0f;   // РЅР°РєР»РѕРЅ РІРІРµСЂС…/РІРЅРёР·
 
-	// чувствительность мыши
-	float m_mouseSensitivity = 0.0025f; // радиан на пиксель (подстрой)
+	// С‡СѓРІСЃС‚РІРёС‚РµР»СЊРЅРѕСЃС‚СЊ РјС‹С€Рё
+	float m_mouseSensitivity = 0.0025f; // СЂР°РґРёР°РЅ РЅР° РїРёРєСЃРµР»СЊ (РїРѕРґСЃС‚СЂРѕР№)
 
-	// дистанция до target (если хочешь "orbital"), для FPS не нужна
+	// РґРёСЃС‚Р°РЅС†РёСЏ РґРѕ target (РµСЃР»Рё С…РѕС‡РµС€СЊ "orbital"), РґР»СЏ FPS РЅРµ РЅСѓР¶РЅР°
 	// float m_camDistance = 5.0f;
+
+	bool m_comInitialized = false;
 
 
 	ID3D12Resource* CurrentBackBuffer() const {

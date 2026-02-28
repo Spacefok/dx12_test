@@ -16,6 +16,7 @@ struct Vertex {
 	DirectX::XMFLOAT3 Pos;
 	DirectX::XMFLOAT3 Normal;
 	DirectX::XMFLOAT4 Color;
+	DirectX::XMFLOAT2 TexC = { 0.0f, 0.0f };
 };
 
 struct alignas(16) ObjectConstants {
@@ -38,8 +39,19 @@ struct alignas(16) PassConstants {
 
 	float SpecPower = 32.0f;
 	DirectX::XMFLOAT3 _pad2 = { 0.0f, 0.0f, 0.0f };
+
+	DirectX::XMFLOAT2 UvScroll = { 0.0f, 0.0f };
+	DirectX::XMFLOAT2 UvTiling = { 1.0f, 1.0f };
+};
+
+struct alignas(16) MaterialConstants {
+	DirectX::XMFLOAT4 DiffuseAlbedo = { 1.0f, 1.0f, 1.0f, 1.0f };
+	DirectX::XMFLOAT4 UvTilingOffset = { 1.0f, 1.0f, 0.0f, 0.0f };
+	std::uint32_t HasTexture = 0;
+	DirectX::XMFLOAT3 _pad = { 0.0f, 0.0f, 0.0f };
 };
 
 static_assert(sizeof(ObjectConstants) % 16 == 0, "ObjectConstants must be 16-byte aligned sized.");
 static_assert(sizeof(PassConstants) % 16 == 0, "PassConstants must be 16-byte aligned sized.");
+static_assert(sizeof(MaterialConstants) % 16 == 0, "MaterialConstants must be 16-byte aligned sized.");
 #endif // !RENDER_STRUCTS_HPP

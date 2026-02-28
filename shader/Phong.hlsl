@@ -20,13 +20,28 @@ cbuffer PassCB : register(b1)
 
     float gSpecPower;
     float3 _pad2;
+
+    float2 gUvScroll;
+    float2 gUvTiling;
 };
+
+cbuffer MaterialCB : register(b2)
+{
+    float4 gMatDiffuseAlbedo;
+    float4 gMatUvTilingOffset; // xy = tiling, zw = offset
+    uint gMatHasTexture;
+    float3 gMatPad;
+};
+
+Texture2D gDiffuseMap : register(t0);
+SamplerState gSamLinearWrap : register(s0);
 
 struct VertexIn
 {
     float3 PosL : POSITION;
     float3 NormalL : NORMAL;
     float4 Color : COLOR;
+    float2 TexC : TEXCOORD;
 };
 
 struct VertexOut
@@ -35,6 +50,7 @@ struct VertexOut
     float3 PosW : TEXCOORD0;
     float3 NormalW : NORMAL;
     float4 Color : COLOR;
+    float2 TexC : TEXCOORD1;
 };
 
 VertexOut VS(VertexIn vin)
@@ -49,17 +65,26 @@ VertexOut VS(VertexIn vin)
     vout.PosH = mul(posW, gViewProj);
 
     vout.Color = vin.Color;
+    vout.TexC = vin.TexC;
     
     return vout;
 }
 
 float4 PS(VertexOut pin) : SV_Target
 {
+    float2 uv = pin.TexC * gMatUvTilingOffset.xy * gUvTiling + gMatUvTilingOffset.zw + gUvScroll;
+
+    float3 texColor = float3(1.0f, 1.0f, 1.0f);
+    if (gMatHasTexture != 0)
+    {
+        texColor = gDiffuseMap.Sample(gSamLinearWrap, uv).rgb;
+    }
+
     float3 N = normalize(pin.NormalW);
     float3 L = normalize(-gLightDirW);
     float3 V = normalize(gEyePosW - pin.PosW);
 
-    float3 base = pin.Color.rgb;
+    float3 base = pin.Color.rgb * gMatDiffuseAlbedo.rgb * texColor;
 
     float ndotl = saturate(dot(N, L));
 
@@ -70,5 +95,6 @@ float4 PS(VertexOut pin) : SV_Target
     float spec = pow(saturate(dot(R, V)), gSpecPower);
     float3 specular = gSpecular.rgb * spec;
 
-    return float4(ambient + diffuse + specular, 1.0f);
+    float alpha = pin.Color.a * gMatDiffuseAlbedo.a;
+    return float4(ambient + diffuse + specular, alpha);
 }
