@@ -427,6 +427,9 @@ LRESULT Framework::MsgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 	case WM_SYSKEYDOWN:
 	{
 		const uint8_t vk = static_cast<uint8_t>(wParam);
+		if (vk == VK_F1 && (lParam & 0x40000000) == 0) {
+			m_showBufferDebug = !m_showBufferDebug;
+		}
 		m_keyDown[vk] = true;
 		return 0;
 	}
@@ -508,7 +511,7 @@ void Framework::OnResize()
 	depthDesc.Height = static_cast<UINT64>(m_clientHeight);
 	depthDesc.DepthOrArraySize = 1;
 	depthDesc.MipLevels = 1;
-	depthDesc.Format = m_depthStencilFormat;
+	depthDesc.Format = m_depthStencilResourceFormat;
 	depthDesc.SampleDesc.Count = 1;
 	depthDesc.SampleDesc.Quality = 0;
 	depthDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
@@ -655,25 +658,31 @@ void Framework::Update(const double& dt)
 	XMStoreFloat3(&deferred.EyePosW, pos);
 	deferred.AmbientIntensity = 0.18f;
 	deferred.AmbientColor = { 1.0f, 1.0f, 1.0f, 1.0f };
+	XMStoreFloat4x4(&deferred.InvViewProj, XMMatrixTranspose(XMMatrixInverse(nullptr, viewProj)));
 
-	deferred.DirectionalLightCount = m_directionalLightCount;
-	deferred.PointLightCount = m_pointLightCount;
-	deferred.SpotLightCount = m_spotLightCount;
+	const UINT dirCount = std::min<UINT>(m_directionalLightCount, MaxDirectionalLights);
+	const UINT pointCount = std::min<UINT>(m_pointLightCount, MaxPointLights);
+	const UINT spotCount = std::min<UINT>(m_spotLightCount, MaxSpotLights);
 
-	for (UINT i = 0; i < m_directionalLightCount; ++i) {
-		deferred.DirectionalLights[i] = m_directionalLights[i];
+	deferred.DirectionalLightCount = dirCount;
+	deferred.PointLightCount = pointCount;
+	deferred.SpotLightCount = spotCount;
+	deferred.DebugViewEnabled = m_showBufferDebug ? 1u : 0u;
+
+	for (UINT i = 0; i < dirCount; ++i) {
+		m_directionalLightSB->CopyData(i, m_directionalLights[i]);
 	}
 
 	const float time = static_cast<float>(m_timer.TotalTime());
-	for (UINT i = 0; i < m_pointLightCount; ++i)
+	for (UINT i = 0; i < pointCount; ++i)
 	{
 		GpuPointLight light = m_pointLights[i];
 		light.PositionRange.y += 0.08f * std::sin(time * 0.85f + 0.35f * static_cast<float>(i));
-		deferred.PointLights[i] = light;
+		m_pointLightSB->CopyData(i, light);
 	}
 
-	for (UINT i = 0; i < m_spotLightCount; ++i) {
-		deferred.SpotLights[i] = m_spotLights[i];
+	for (UINT i = 0; i < spotCount; ++i) {
+		m_spotLightSB->CopyData(i, m_spotLights[i]);
 	}
 
 	m_deferredPassCB->CopyData(0, deferred);
@@ -756,6 +765,14 @@ void Framework::Draw()
 
 	m_gbuffer.TransitionToShaderResources(m_commandList.Get());
 
+	D3D12_RESOURCE_BARRIER depthToSrv{};
+	depthToSrv.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+	depthToSrv.Transition.pResource = m_depthStencilBuffer.Get();
+	depthToSrv.Transition.StateBefore = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+	depthToSrv.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+	depthToSrv.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+	m_commandList->ResourceBarrier(1, &depthToSrv);
+
 	D3D12_RESOURCE_BARRIER toRT{};
 	toRT.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
 	toRT.Transition.pResource = CurrentBackBuffer();
@@ -774,6 +791,14 @@ void Framework::Draw()
 	m_commandList->SetGraphicsRootDescriptorTable(1, CbvSrvGpuHandle(m_gbufferSrvBaseIndex));
 	m_commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 	m_commandList->DrawInstanced(3, 1, 0, 0);
+
+	D3D12_RESOURCE_BARRIER depthToWrite{};
+	depthToWrite.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+	depthToWrite.Transition.pResource = m_depthStencilBuffer.Get();
+	depthToWrite.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+	depthToWrite.Transition.StateAfter = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+	depthToWrite.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+	m_commandList->ResourceBarrier(1, &depthToWrite);
 
 	D3D12_RESOURCE_BARRIER toPresent{};
 	toPresent.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -1029,6 +1054,9 @@ void Framework::BuildConstantBuffers()
 	m_objectCB = std::make_unique<UploadBuffer<ObjectConstants>>(m_device.Get(), 1, true);
 	m_passCB = std::make_unique<UploadBuffer<PassConstants>>(m_device.Get(), 1, true);
 	m_deferredPassCB = std::make_unique<UploadBuffer<DeferredPassConstants>>(m_device.Get(), 1, true);
+	m_directionalLightSB = std::make_unique<UploadBuffer<GpuDirectionalLight>>(m_device.Get(), MaxDirectionalLights, false);
+	m_pointLightSB = std::make_unique<UploadBuffer<GpuPointLight>>(m_device.Get(), MaxPointLights, false);
+	m_spotLightSB = std::make_unique<UploadBuffer<GpuSpotLight>>(m_device.Get(), MaxSpotLights, false);
 }
 
 void Framework::BuildCbvHeap()
@@ -1037,9 +1065,13 @@ void Framework::BuildCbvHeap()
 	m_textureSrvCount = std::max<UINT>(1u, static_cast<UINT>(m_textureResources.size()));
 	m_deferredPassCbvIndex = m_textureSrvBaseIndex + m_textureSrvCount;
 	m_gbufferSrvBaseIndex = m_deferredPassCbvIndex + 1;
+	m_depthSrvIndex = m_gbufferSrvBaseIndex + Gbuffer::kTargetCount;
+	m_directionalLightSrvIndex = m_depthSrvIndex + 1;
+	m_pointLightSrvIndex = m_directionalLightSrvIndex + 1;
+	m_spotLightSrvIndex = m_pointLightSrvIndex + 1;
 
 	D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
-	heapDesc.NumDescriptors = m_gbufferSrvBaseIndex + Gbuffer::kTargetCount;
+	heapDesc.NumDescriptors = m_spotLightSrvIndex + 1;
 	heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
 	heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
 
@@ -1092,6 +1124,49 @@ void Framework::BuildCbvViews()
 	if (m_gbuffer.IsValid()) {
 		m_gbuffer.CreateSrvDescriptors(m_device.Get(), CbvSrvCpuHandle(m_gbufferSrvBaseIndex), m_cbvSrvUavDescriptorSize);
 	}
+
+	if (m_depthStencilBuffer) {
+		D3D12_SHADER_RESOURCE_VIEW_DESC depthSrvDesc = {};
+		depthSrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+		depthSrvDesc.Format = m_depthStencilSrvFormat;
+		depthSrvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+		depthSrvDesc.Texture2D.MostDetailedMip = 0;
+		depthSrvDesc.Texture2D.MipLevels = 1;
+		depthSrvDesc.Texture2D.PlaneSlice = 0;
+		depthSrvDesc.Texture2D.ResourceMinLODClamp = 0.0f;
+		m_device->CreateShaderResourceView(m_depthStencilBuffer.Get(), &depthSrvDesc, CbvSrvCpuHandle(m_depthSrvIndex));
+	}
+
+	auto CreateStructuredLightSrv = [&](ID3D12Resource* resource, UINT numElements, UINT stride, UINT descriptorIndex)
+	{
+		D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+		srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+		srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+		srvDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+		srvDesc.Buffer.FirstElement = 0;
+		srvDesc.Buffer.NumElements = numElements;
+		srvDesc.Buffer.StructureByteStride = stride;
+		srvDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
+		m_device->CreateShaderResourceView(resource, &srvDesc, CbvSrvCpuHandle(descriptorIndex));
+	};
+
+	CreateStructuredLightSrv(
+		m_directionalLightSB ? m_directionalLightSB->Resource() : nullptr,
+		MaxDirectionalLights,
+		static_cast<UINT>(sizeof(GpuDirectionalLight)),
+		m_directionalLightSrvIndex);
+
+	CreateStructuredLightSrv(
+		m_pointLightSB ? m_pointLightSB->Resource() : nullptr,
+		MaxPointLights,
+		static_cast<UINT>(sizeof(GpuPointLight)),
+		m_pointLightSrvIndex);
+
+	CreateStructuredLightSrv(
+		m_spotLightSB ? m_spotLightSB->Resource() : nullptr,
+		MaxSpotLights,
+		static_cast<UINT>(sizeof(GpuSpotLight)),
+		m_spotLightSrvIndex);
 }
 
 void Framework::BuildRootSignature()

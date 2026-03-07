@@ -92,6 +92,8 @@ private:
 	ComPtr<ID3D12Resource> m_depthStencilBuffer;
 
 	DXGI_FORMAT m_depthStencilFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;
+	DXGI_FORMAT m_depthStencilResourceFormat = DXGI_FORMAT_R24G8_TYPELESS;
+	DXGI_FORMAT m_depthStencilSrvFormat = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
 	D3D12_VIEWPORT m_screenViewport = {};
 	D3D12_RECT m_scissorRect = {};
 
@@ -101,6 +103,9 @@ private:
 	std::unique_ptr<UploadBuffer<ObjectConstants>> m_objectCB;
 	std::unique_ptr<UploadBuffer<PassConstants>>   m_passCB;
 	std::unique_ptr<UploadBuffer<DeferredPassConstants>> m_deferredPassCB;
+	std::unique_ptr<UploadBuffer<GpuDirectionalLight>> m_directionalLightSB;
+	std::unique_ptr<UploadBuffer<GpuPointLight>> m_pointLightSB;
+	std::unique_ptr<UploadBuffer<GpuSpotLight>> m_spotLightSB;
 
 	Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> m_cbvHeap;
 
@@ -108,6 +113,10 @@ private:
 	UINT m_textureSrvCount = 0;
 	UINT m_deferredPassCbvIndex = 0;
 	UINT m_gbufferSrvBaseIndex = 0;
+	UINT m_depthSrvIndex = 0;
+	UINT m_directionalLightSrvIndex = 0;
+	UINT m_pointLightSrvIndex = 0;
+	UINT m_spotLightSrvIndex = 0;
 
 	std::array<GpuDirectionalLight, MaxDirectionalLights> m_directionalLights{};
 	std::array<GpuPointLight, MaxPointLights> m_pointLights{};
@@ -178,6 +187,7 @@ private:
 	DirectX::XMFLOAT2 m_uvAnimationSpeed = { 0.08f, 0.0f };
 	DirectX::XMFLOAT2 m_uvGlobalTiling = { 1.0f, 1.0f };
 	std::array<bool, 256> m_keyDown{}; // состояние VK_*
+	bool m_showBufferDebug = false;
 
 	float m_cameraMoveSpeed = 3.0f;   // units/sec, подстрой под сцену
 

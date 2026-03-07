@@ -115,6 +115,6 @@ GBufferOut PS(VertexOut pin)
 
     gout.Albedo = float4(albedo, alpha);
     gout.Normal = float4(normalW, 1.0f);
-    gout.PositionSpec = float4(pin.PosW, max(gSpecPower, 1.0f));
+    gout.PositionSpec = float4(0.0f, 0.0f, 0.0f, max(gSpecPower, 1.0f));
     return gout;
 }

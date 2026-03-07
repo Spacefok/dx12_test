@@ -81,13 +81,11 @@ struct alignas(16) DeferredPassConstants {
 	DirectX::XMFLOAT3 EyePosW = { 0.0f, 0.0f, 0.0f };
 	float AmbientIntensity = 0.2f;
 	DirectX::XMFLOAT4 AmbientColor = { 1.0f, 1.0f, 1.0f, 1.0f };
+	DirectX::XMFLOAT4X4 InvViewProj = dx::Identity4x4();
 	std::uint32_t DirectionalLightCount = 0;
 	std::uint32_t PointLightCount = 0;
 	std::uint32_t SpotLightCount = 0;
-	std::uint32_t _pad0 = 0;
-	std::array<GpuDirectionalLight, MaxDirectionalLights> DirectionalLights{};
-	std::array<GpuPointLight, MaxPointLights> PointLights{};
-	std::array<GpuSpotLight, MaxSpotLights> SpotLights{};
+	std::uint32_t DebugViewEnabled = 0;
 };
 
 static_assert(sizeof(ObjectConstants) % 16 == 0, "ObjectConstants must be 16-byte aligned sized.");

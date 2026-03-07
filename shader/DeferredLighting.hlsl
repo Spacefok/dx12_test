@@ -1,7 +1,3 @@
-#define MAX_DIRECTIONAL_LIGHTS 4
-#define MAX_POINT_LIGHTS 32
-#define MAX_SPOT_LIGHTS 16
-
 struct DirectionalLight
 {
     float4 DirectionIntensity; // xyz = direction, w = intensity
@@ -27,18 +23,20 @@ cbuffer DeferredPassCB : register(b0)
     float3 gEyePosW;
     float gAmbientIntensity;
     float4 gAmbientColor;
+    float4x4 gInvViewProj;
     uint gDirectionalLightCount;
     uint gPointLightCount;
     uint gSpotLightCount;
-    uint gPad0;
-    DirectionalLight gDirectionalLights[MAX_DIRECTIONAL_LIGHTS];
-    PointLight gPointLights[MAX_POINT_LIGHTS];
-    SpotLight gSpotLights[MAX_SPOT_LIGHTS];
+    uint gDebugViewEnabled;
 };
 
 Texture2D gAlbedoTex : register(t0);
 Texture2D gNormalTex : register(t1);
 Texture2D gPositionSpecTex : register(t2);
+Texture2D<float> gDepthTex : register(t3);
+StructuredBuffer<DirectionalLight> gDirectionalLights : register(t4);
+StructuredBuffer<PointLight> gPointLights : register(t5);
+StructuredBuffer<SpotLight> gSpotLights : register(t6);
 SamplerState gSamPointClamp : register(s0);
 
 struct FullscreenOut
@@ -164,13 +162,216 @@ float3 EvaluateSpot(SpotLight light, float3 posW, float3 albedo, float3 normalW,
     return result;
 }
 
+float3 ReconstructWorldPos(float2 texC, float depth)
+{
+    float2 ndc;
+    ndc.x = texC.x * 2.0f - 1.0f;
+    ndc.y = 1.0f - texC.y * 2.0f;
+
+    float4 clipPos = float4(ndc, depth, 1.0f);
+    float4 worldPos = mul(clipPos, gInvViewProj);
+    float invW = (abs(worldPos.w) > 1e-6f) ? rcp(worldPos.w) : 0.0f;
+    return worldPos.xyz * invW;
+}
+
+float3 VisualizeNormal(float3 normalW)
+{
+    float3 n = float3(0.0f, 0.0f, 1.0f);
+    float len2 = dot(normalW, normalW);
+    if (len2 > 1e-6f) {
+        n = normalW * rsqrt(len2);
+    }
+    return n * 0.5f + 0.5f;
+}
+
+float3 VisualizePosition(float3 posW)
+{
+    float3 absPos = abs(posW);
+    return absPos / (1.0f + absPos);
+}
+
+static const uint GLYPH_A = 0u;
+static const uint GLYPH_B = 1u;
+static const uint GLYPH_C = 2u;
+static const uint GLYPH_D = 3u;
+static const uint GLYPH_E = 4u;
+static const uint GLYPH_H = 5u;
+static const uint GLYPH_I = 6u;
+static const uint GLYPH_L = 7u;
+static const uint GLYPH_M = 8u;
+static const uint GLYPH_N = 9u;
+static const uint GLYPH_O = 10u;
+static const uint GLYPH_P = 11u;
+static const uint GLYPH_R = 12u;
+static const uint GLYPH_S = 13u;
+static const uint GLYPH_T = 14u;
+
+static const uint LABEL_ALBEDO = 0u;
+static const uint LABEL_NORMAL = 1u;
+static const uint LABEL_SPEC = 2u;
+static const uint LABEL_DEPTH = 3u;
+static const uint LABEL_POSITION = 4u;
+
+uint GlyphRowBits(uint glyph, uint row)
+{
+    uint bits = 0u;
+    switch (glyph)
+    {
+    case GLYPH_A:
+        switch (row) { case 0u: bits = 14u; break; case 1u: bits = 17u; break; case 2u: bits = 17u; break; case 3u: bits = 31u; break; case 4u: bits = 17u; break; case 5u: bits = 17u; break; case 6u: bits = 17u; break; }
+        break;
+    case GLYPH_B:
+        switch (row) { case 0u: bits = 30u; break; case 1u: bits = 17u; break; case 2u: bits = 17u; break; case 3u: bits = 30u; break; case 4u: bits = 17u; break; case 5u: bits = 17u; break; case 6u: bits = 30u; break; }
+        break;
+    case GLYPH_C:
+        switch (row) { case 0u: bits = 15u; break; case 1u: bits = 16u; break; case 2u: bits = 16u; break; case 3u: bits = 16u; break; case 4u: bits = 16u; break; case 5u: bits = 16u; break; case 6u: bits = 15u; break; }
+        break;
+    case GLYPH_D:
+        switch (row) { case 0u: bits = 30u; break; case 1u: bits = 17u; break; case 2u: bits = 17u; break; case 3u: bits = 17u; break; case 4u: bits = 17u; break; case 5u: bits = 17u; break; case 6u: bits = 30u; break; }
+        break;
+    case GLYPH_E:
+        switch (row) { case 0u: bits = 31u; break; case 1u: bits = 16u; break; case 2u: bits = 16u; break; case 3u: bits = 30u; break; case 4u: bits = 16u; break; case 5u: bits = 16u; break; case 6u: bits = 31u; break; }
+        break;
+    case GLYPH_H:
+        switch (row) { case 0u: bits = 17u; break; case 1u: bits = 17u; break; case 2u: bits = 17u; break; case 3u: bits = 31u; break; case 4u: bits = 17u; break; case 5u: bits = 17u; break; case 6u: bits = 17u; break; }
+        break;
+    case GLYPH_I:
+        switch (row) { case 0u: bits = 31u; break; case 1u: bits = 4u; break; case 2u: bits = 4u; break; case 3u: bits = 4u; break; case 4u: bits = 4u; break; case 5u: bits = 4u; break; case 6u: bits = 31u; break; }
+        break;
+    case GLYPH_L:
+        switch (row) { case 0u: bits = 16u; break; case 1u: bits = 16u; break; case 2u: bits = 16u; break; case 3u: bits = 16u; break; case 4u: bits = 16u; break; case 5u: bits = 16u; break; case 6u: bits = 31u; break; }
+        break;
+    case GLYPH_M:
+        switch (row) { case 0u: bits = 17u; break; case 1u: bits = 27u; break; case 2u: bits = 21u; break; case 3u: bits = 21u; break; case 4u: bits = 17u; break; case 5u: bits = 17u; break; case 6u: bits = 17u; break; }
+        break;
+    case GLYPH_N:
+        switch (row) { case 0u: bits = 17u; break; case 1u: bits = 25u; break; case 2u: bits = 21u; break; case 3u: bits = 19u; break; case 4u: bits = 17u; break; case 5u: bits = 17u; break; case 6u: bits = 17u; break; }
+        break;
+    case GLYPH_O:
+        switch (row) { case 0u: bits = 14u; break; case 1u: bits = 17u; break; case 2u: bits = 17u; break; case 3u: bits = 17u; break; case 4u: bits = 17u; break; case 5u: bits = 17u; break; case 6u: bits = 14u; break; }
+        break;
+    case GLYPH_P:
+        switch (row) { case 0u: bits = 30u; break; case 1u: bits = 17u; break; case 2u: bits = 17u; break; case 3u: bits = 30u; break; case 4u: bits = 16u; break; case 5u: bits = 16u; break; case 6u: bits = 16u; break; }
+        break;
+    case GLYPH_R:
+        switch (row) { case 0u: bits = 30u; break; case 1u: bits = 17u; break; case 2u: bits = 17u; break; case 3u: bits = 30u; break; case 4u: bits = 20u; break; case 5u: bits = 18u; break; case 6u: bits = 17u; break; }
+        break;
+    case GLYPH_S:
+        switch (row) { case 0u: bits = 15u; break; case 1u: bits = 16u; break; case 2u: bits = 16u; break; case 3u: bits = 14u; break; case 4u: bits = 1u; break; case 5u: bits = 1u; break; case 6u: bits = 30u; break; }
+        break;
+    case GLYPH_T:
+        switch (row) { case 0u: bits = 31u; break; case 1u: bits = 4u; break; case 2u: bits = 4u; break; case 3u: bits = 4u; break; case 4u: bits = 4u; break; case 5u: bits = 4u; break; case 6u: bits = 4u; break; }
+        break;
+    default:
+        bits = 0u;
+        break;
+    }
+    return bits;
+}
+
+float GlyphMask(float2 uv, uint glyph)
+{
+    float mask = 0.0f;
+
+    if (!(uv.x < 0.0f || uv.y < 0.0f || uv.x >= 1.0f || uv.y >= 1.0f))
+    {
+        uint px = (uint)floor(uv.x * 5.0f);
+        uint py = (uint)floor(uv.y * 7.0f);
+        uint rowBits = GlyphRowBits(glyph, py);
+        uint bit = (rowBits >> (4u - px)) & 1u;
+        mask = (bit != 0u) ? 1.0f : 0.0f;
+    }
+
+    return mask;
+}
+
+float GlyphAt(float2 uv, float2 origin, float2 charSize, uint glyph)
+{
+    float2 charUv = (uv - origin) / charSize;
+    return GlyphMask(charUv, glyph);
+}
+
+float DrawWord(float2 uv, uint g0, uint g1, uint g2, uint g3, uint g4, uint g5, uint g6, uint g7, uint glyphCount)
+{
+    const float2 charSize = float2(0.034f, 0.060f);
+    const float xStep = 0.040f;
+    const float2 origin = float2(0.030f, 0.035f);
+
+    float mask = 0.0f;
+    if (glyphCount > 0u) mask = max(mask, GlyphAt(uv, origin + float2(xStep * 0.0f, 0.0f), charSize, g0));
+    if (glyphCount > 1u) mask = max(mask, GlyphAt(uv, origin + float2(xStep * 1.0f, 0.0f), charSize, g1));
+    if (glyphCount > 2u) mask = max(mask, GlyphAt(uv, origin + float2(xStep * 2.0f, 0.0f), charSize, g2));
+    if (glyphCount > 3u) mask = max(mask, GlyphAt(uv, origin + float2(xStep * 3.0f, 0.0f), charSize, g3));
+    if (glyphCount > 4u) mask = max(mask, GlyphAt(uv, origin + float2(xStep * 4.0f, 0.0f), charSize, g4));
+    if (glyphCount > 5u) mask = max(mask, GlyphAt(uv, origin + float2(xStep * 5.0f, 0.0f), charSize, g5));
+    if (glyphCount > 6u) mask = max(mask, GlyphAt(uv, origin + float2(xStep * 6.0f, 0.0f), charSize, g6));
+    if (glyphCount > 7u) mask = max(mask, GlyphAt(uv, origin + float2(xStep * 7.0f, 0.0f), charSize, g7));
+
+    return mask;
+}
+
+float PanelLabelMask(uint labelId, float2 panelUv)
+{
+    float mask = 0.0f;
+
+    if (labelId == LABEL_ALBEDO) {
+        mask = DrawWord(panelUv, GLYPH_A, GLYPH_L, GLYPH_B, GLYPH_E, GLYPH_D, GLYPH_O, GLYPH_A, GLYPH_A, 6u);
+    }
+    else if (labelId == LABEL_NORMAL) {
+        mask = DrawWord(panelUv, GLYPH_N, GLYPH_O, GLYPH_R, GLYPH_M, GLYPH_A, GLYPH_L, GLYPH_A, GLYPH_A, 6u);
+    }
+    else if (labelId == LABEL_SPEC) {
+        mask = DrawWord(panelUv, GLYPH_S, GLYPH_P, GLYPH_E, GLYPH_C, GLYPH_A, GLYPH_A, GLYPH_A, GLYPH_A, 4u);
+    }
+    else if (labelId == LABEL_DEPTH) {
+        mask = DrawWord(panelUv, GLYPH_D, GLYPH_E, GLYPH_P, GLYPH_T, GLYPH_H, GLYPH_A, GLYPH_A, GLYPH_A, 5u);
+    }
+    else {
+        mask = DrawWord(panelUv, GLYPH_P, GLYPH_O, GLYPH_S, GLYPH_I, GLYPH_T, GLYPH_I, GLYPH_O, GLYPH_N, 8u);
+    }
+
+    return mask;
+}
+
+float3 ApplyLabelOverlay(float3 panelColor, uint labelId, float2 panelUv)
+{
+    float shadow = PanelLabelMask(labelId, panelUv + float2(0.006f, 0.008f));
+    float text = PanelLabelMask(labelId, panelUv);
+    panelColor = lerp(panelColor, float3(0.0f, 0.0f, 0.0f), saturate(shadow));
+    panelColor = lerp(panelColor, float3(1.0f, 1.0f, 0.0f), saturate(text));
+    return panelColor;
+}
+
+float3 SampleDebugPanel(uint tileX, uint tileY, float2 panelUv, out uint labelId)
+{
+    float3 albedo = gAlbedoTex.Sample(gSamPointClamp, panelUv).rgb;
+    float3 normalW = gNormalTex.Sample(gSamPointClamp, panelUv).xyz;
+    float specPower = max(gPositionSpecTex.Sample(gSamPointClamp, panelUv).w, 1.0f);
+    float depth = saturate(gDepthTex.Sample(gSamPointClamp, panelUv));
+    float3 posW = ReconstructWorldPos(panelUv, depth);
+
+    float3 panel = depth.xxx;
+    labelId = LABEL_DEPTH;
+
+    if (tileY == 0u && tileX == 0u) { panel = albedo; labelId = LABEL_ALBEDO; }
+    else if (tileY == 0u && tileX == 1u) { panel = VisualizeNormal(normalW); labelId = LABEL_NORMAL; }
+    else if (tileY == 0u && tileX == 2u) { panel = saturate(specPower / 128.0f).xxx; labelId = LABEL_SPEC; }
+    else if (tileY == 1u && tileX == 0u) { panel = depth.xxx; labelId = LABEL_DEPTH; }
+    else if (tileY == 1u && tileX == 2u) { panel = VisualizePosition(posW); labelId = LABEL_POSITION; }
+    else if (tileY == 2u && tileX == 0u) { panel = albedo; labelId = LABEL_ALBEDO; }
+    else if (tileY == 2u && tileX == 1u) { panel = VisualizeNormal(normalW); labelId = LABEL_NORMAL; }
+    else if (tileY == 2u && tileX == 2u) { panel = depth.xxx; labelId = LABEL_DEPTH; }
+
+    return panel;
+}
+
 float4 PSLighting(FullscreenOut pin) : SV_Target
 {
     float3 albedo = gAlbedoTex.Sample(gSamPointClamp, pin.TexC).rgb;
     float3 normalW = gNormalTex.Sample(gSamPointClamp, pin.TexC).xyz;
-    float4 posSpec = gPositionSpecTex.Sample(gSamPointClamp, pin.TexC);
-    float3 posW = posSpec.xyz;
-    float specPower = max(posSpec.w, 1.0f);
+    float specPower = max(gPositionSpecTex.Sample(gSamPointClamp, pin.TexC).w, 1.0f);
+    float depth = gDepthTex.Sample(gSamPointClamp, pin.TexC);
+    float3 posW = ReconstructWorldPos(pin.TexC, saturate(depth));
 
     if (dot(normalW, normalW) < 1e-6f)
     {
@@ -188,21 +389,38 @@ float4 PSLighting(FullscreenOut pin) : SV_Target
     float3 color = albedo * gAmbientColor.rgb * gAmbientIntensity;
 
     [loop]
-    for (uint dirIndex = 0; dirIndex < gDirectionalLightCount && dirIndex < MAX_DIRECTIONAL_LIGHTS; ++dirIndex)
+    for (uint dirIndex = 0; dirIndex < gDirectionalLightCount; ++dirIndex)
     {
         color += EvaluateDirectional(gDirectionalLights[dirIndex], albedo, normalW, viewDir, specPower);
     }
 
     [loop]
-    for (uint pointIndex = 0; pointIndex < gPointLightCount && pointIndex < MAX_POINT_LIGHTS; ++pointIndex)
+    for (uint pointIndex = 0; pointIndex < gPointLightCount; ++pointIndex)
     {
         color += EvaluatePoint(gPointLights[pointIndex], posW, albedo, normalW, viewDir, specPower);
     }
 
     [loop]
-    for (uint spotIndex = 0; spotIndex < gSpotLightCount && spotIndex < MAX_SPOT_LIGHTS; ++spotIndex)
+    for (uint spotIndex = 0; spotIndex < gSpotLightCount; ++spotIndex)
     {
         color += EvaluateSpot(gSpotLights[spotIndex], posW, albedo, normalW, viewDir, specPower);
+    }
+
+    if (gDebugViewEnabled != 0u)
+    {
+        float2 debugUv = saturate(pin.TexC);
+        float2 tileCoord = debugUv * 3.0f;
+        uint tileX = (uint)min(floor(tileCoord.x), 2.0f);
+        uint tileY = (uint)min(floor(tileCoord.y), 2.0f);
+
+        if (tileX != 1u || tileY != 1u)
+        {
+            float2 panelUv = frac(tileCoord);
+            uint labelId = LABEL_DEPTH;
+            float3 panelColor = SampleDebugPanel(tileX, tileY, panelUv, labelId);
+            panelColor = ApplyLabelOverlay(panelColor, labelId, panelUv);
+            return float4(panelColor, 1.0f);
+        }
     }
 
     return float4(color, 1.0f);
