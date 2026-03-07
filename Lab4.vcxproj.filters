@@ -24,6 +24,12 @@
     <ClCompile Include="src\Framework.cpp">
       <Filter>Исходные файлы</Filter>
     </ClCompile>
+    <ClCompile Include="src\Gbuffer.cpp">
+      <Filter>Исходные файлы</Filter>
+    </ClCompile>
+    <ClCompile Include="src\RenderingSystem.cpp">
+      <Filter>Исходные файлы</Filter>
+    </ClCompile>
     <ClCompile Include="src\Timer.cpp">
       <Filter>Исходные файлы</Filter>
     </ClCompile>
@@ -35,6 +41,9 @@
     <ClInclude Include="include\Framework.hpp">
       <Filter>Файлы заголовков</Filter>
     </ClInclude>
+    <ClInclude Include="include\Gbuffer.hpp">
+      <Filter>Файлы заголовков</Filter>
+    </ClInclude>
     <ClInclude Include="include\Timer.hpp">
       <Filter>Файлы заголовков</Filter>
     </ClInclude>
@@ -42,6 +51,9 @@
       <Filter>Файлы заголовков</Filter>
     </ClInclude>
     <ClInclude Include="include\RenderStructs.hpp">
+      <Filter>Файлы заголовков</Filter>
+    </ClInclude>
+    <ClInclude Include="include\RenderingSystem.hpp">
       <Filter>Файлы заголовков</Filter>
     </ClInclude>
     <ClInclude Include="include\UploadBuffer.hpp">
@@ -52,6 +64,12 @@
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
+    <None Include="shader\DeferredGeometry.hlsl">
+      <Filter>Файлы ресурсов</Filter>
+    </None>
+    <None Include="shader\DeferredLighting.hlsl">
+      <Filter>Файлы ресурсов</Filter>
+    </None>
     <None Include="shader\Phong.hlsl">
       <Filter>Файлы ресурсов</Filter>
     </None>

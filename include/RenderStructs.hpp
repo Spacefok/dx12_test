@@ -3,6 +3,7 @@
 
 #include <DirectXMath.h>
 #include <cstdint>
+#include <array>
 
 namespace dx {
 	inline DirectX::XMFLOAT4X4 Identity4x4() {
@@ -55,7 +56,42 @@ struct alignas(16) MaterialConstants {
 	DirectX::XMFLOAT4 WindParams = { 0.0f, 0.0f, 0.0f, 0.0f }; // x = enabled, y = amplitude, z = spatial frequency, w = speed
 };
 
+constexpr std::uint32_t MaxDirectionalLights = 4;
+constexpr std::uint32_t MaxPointLights = 32;
+constexpr std::uint32_t MaxSpotLights = 16;
+
+struct alignas(16) GpuDirectionalLight {
+	DirectX::XMFLOAT4 DirectionIntensity = { 0.0f, -1.0f, 0.0f, 0.0f }; // xyz = direction, w = intensity
+	DirectX::XMFLOAT4 Color = { 1.0f, 1.0f, 1.0f, 1.0f };
+};
+
+struct alignas(16) GpuPointLight {
+	DirectX::XMFLOAT4 PositionRange = { 0.0f, 0.0f, 0.0f, 1.0f }; // xyz = position, w = range
+	DirectX::XMFLOAT4 ColorIntensity = { 1.0f, 1.0f, 1.0f, 1.0f }; // xyz = color, w = intensity
+};
+
+struct alignas(16) GpuSpotLight {
+	DirectX::XMFLOAT4 PositionRange = { 0.0f, 0.0f, 0.0f, 1.0f }; // xyz = position, w = range
+	DirectX::XMFLOAT4 DirectionCosInner = { 0.0f, -1.0f, 0.0f, 0.9f }; // xyz = direction, w = cos(inner cone)
+	DirectX::XMFLOAT4 ColorIntensity = { 1.0f, 1.0f, 1.0f, 1.0f }; // xyz = color, w = intensity
+	DirectX::XMFLOAT4 Params = { 0.75f, 0.0f, 0.0f, 0.0f }; // x = cos(outer cone)
+};
+
+struct alignas(16) DeferredPassConstants {
+	DirectX::XMFLOAT3 EyePosW = { 0.0f, 0.0f, 0.0f };
+	float AmbientIntensity = 0.2f;
+	DirectX::XMFLOAT4 AmbientColor = { 1.0f, 1.0f, 1.0f, 1.0f };
+	std::uint32_t DirectionalLightCount = 0;
+	std::uint32_t PointLightCount = 0;
+	std::uint32_t SpotLightCount = 0;
+	std::uint32_t _pad0 = 0;
+	std::array<GpuDirectionalLight, MaxDirectionalLights> DirectionalLights{};
+	std::array<GpuPointLight, MaxPointLights> PointLights{};
+	std::array<GpuSpotLight, MaxSpotLights> SpotLights{};
+};
+
 static_assert(sizeof(ObjectConstants) % 16 == 0, "ObjectConstants must be 16-byte aligned sized.");
 static_assert(sizeof(PassConstants) % 16 == 0, "PassConstants must be 16-byte aligned sized.");
 static_assert(sizeof(MaterialConstants) % 16 == 0, "MaterialConstants must be 16-byte aligned sized.");
+static_assert(sizeof(DeferredPassConstants) % 16 == 0, "DeferredPassConstants must be 16-byte aligned sized.");
 #endif // !RENDER_STRUCTS_HPP

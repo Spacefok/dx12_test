@@ -13,6 +13,8 @@
 #include "Dx12Common.hpp"
 #include "UploadBuffer.hpp"
 #include "RenderStructs.hpp"
+#include "Gbuffer.hpp"
+#include "RenderingSystem.hpp"
 
 class Framework : public IWindowMessageHandler {
 public:
@@ -93,16 +95,26 @@ private:
 	D3D12_VIEWPORT m_screenViewport = {};
 	D3D12_RECT m_scissorRect = {};
 
-	ComPtr<ID3DBlob> m_vsByteCode;
-	ComPtr<ID3DBlob> m_psByteCode;
+	Gbuffer m_gbuffer;
+	RenderingSystem m_renderingSystem;
 
 	std::unique_ptr<UploadBuffer<ObjectConstants>> m_objectCB;
 	std::unique_ptr<UploadBuffer<PassConstants>>   m_passCB;
+	std::unique_ptr<UploadBuffer<DeferredPassConstants>> m_deferredPassCB;
 
 	Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> m_cbvHeap;
 
-	ComPtr<ID3D12RootSignature> m_rootSignature;
-	ComPtr<ID3D12PipelineState> m_pso;
+	UINT m_textureSrvBaseIndex = 2;
+	UINT m_textureSrvCount = 0;
+	UINT m_deferredPassCbvIndex = 0;
+	UINT m_gbufferSrvBaseIndex = 0;
+
+	std::array<GpuDirectionalLight, MaxDirectionalLights> m_directionalLights{};
+	std::array<GpuPointLight, MaxPointLights> m_pointLights{};
+	std::array<GpuSpotLight, MaxSpotLights> m_spotLights{};
+	UINT m_directionalLightCount = 0;
+	UINT m_pointLightCount = 0;
+	UINT m_spotLightCount = 0;
 
 	void InitDxgi();
 	void PickAdapter();
@@ -120,6 +132,7 @@ private:
 	void BuildRootSignature();
 	void BuildPSO();
 	void BuildObjVB_Upload();
+	void BuildSceneLights();
 
 	void BuildBoxGeometry();
 
@@ -200,6 +213,18 @@ private:
 
 	D3D12_CPU_DESCRIPTOR_HANDLE DepthStencilView() const {
 		return m_dsvHeap->GetCPUDescriptorHandleForHeapStart();
+	}
+
+	D3D12_CPU_DESCRIPTOR_HANDLE CbvSrvCpuHandle(UINT index) const {
+		D3D12_CPU_DESCRIPTOR_HANDLE h = m_cbvHeap->GetCPUDescriptorHandleForHeapStart();
+		h.ptr += static_cast<SIZE_T>(index) * m_cbvSrvUavDescriptorSize;
+		return h;
+	}
+
+	D3D12_GPU_DESCRIPTOR_HANDLE CbvSrvGpuHandle(UINT index) const {
+		D3D12_GPU_DESCRIPTOR_HANDLE h = m_cbvHeap->GetGPUDescriptorHandleForHeapStart();
+		h.ptr += static_cast<SIZE_T>(index) * m_cbvSrvUavDescriptorSize;
+		return h;
 	}
 };
 
