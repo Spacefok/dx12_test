@@ -167,6 +167,7 @@ private:
 		DirectX::XMFLOAT2 UvTiling = { 1.0f, 1.0f };
 		DirectX::XMFLOAT2 UvOffset = { 0.0f, 0.0f };
 		DirectX::XMFLOAT4 WindParams = { 0.0f, 0.0f, 0.0f, 0.0f };
+		DirectX::XMFLOAT4 WaterParams = { 0.0f, 0.0f, 0.0f, 0.0f };
 		std::array<UINT, MaterialTextureSlotCount> TextureIndices = {
 			0u, 1u, 2u, 3u
 		};
@@ -219,6 +220,12 @@ private:
 		float ForwardSpecPower = 32.0f;
 		float DeferredAmbientIntensity = 0.18f;
 		DirectX::XMFLOAT4 DeferredAmbientColor = { 1.0f, 1.0f, 1.0f, 1.0f };
+		bool EnableWaterPlane = false;
+		DirectX::XMFLOAT2 WaterPlaneSize = { 0.55f, 0.32f }; // relative to scene X/Z bounds
+		float WaterPlaneHeight = 0.08f; // relative to scene Y bounds from minY
+		float WaterPlaneUvScale = 1.0f;
+		DirectX::XMFLOAT4 WaterPlaneColor = { 0.20f, 0.57f, 0.86f, 1.0f };
+		DirectX::XMFLOAT4 WaterWaveParams = { 0.028f, 5.5f, 1.15f, 0.42f };
 	};
 
 	Microsoft::WRL::ComPtr<ID3D12Resource> m_modelVB;

@@ -32,6 +32,8 @@ constexpr std::uint32_t MaterialFlagHasNormalTexture = 1u << 1;
 constexpr std::uint32_t MaterialFlagHasDisplacementTexture = 1u << 2;
 constexpr std::uint32_t MaterialFlagHasOpacityTexture = 1u << 3;
 constexpr std::uint32_t MaterialFlagDisplacementFromNormal = 1u << 4;
+constexpr std::uint32_t MaterialFlagUseTessellation = 1u << 5;
+constexpr std::uint32_t MaterialFlagProceduralWater = 1u << 6;
 
 struct alignas(16) ObjectConstants {
 	DirectX::XMFLOAT4X4 World = dx::Identity4x4();
@@ -71,6 +73,7 @@ struct alignas(16) MaterialConstants {
 	float DisplacementBias = 0.0f;
 	float AlphaCutoff = 0.33f;
 	DirectX::XMFLOAT4 WindParams = { 0.0f, 0.0f, 0.0f, 0.0f }; // x = enabled, y = amplitude, z = spatial frequency, w = speed
+	DirectX::XMFLOAT4 WaterParams = { 0.0f, 0.0f, 0.0f, 0.0f }; // x = amplitude, y = uv frequency, z = speed, w = secondary wave ratio
 };
 
 constexpr std::uint32_t MaxDirectionalLights = 4;

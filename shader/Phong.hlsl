@@ -35,6 +35,7 @@ cbuffer MaterialCB : register(b2)
     uint gMatHasTexture;
     float3 gMatPad;
     float4 gMatWindParams; // x = enabled, y = amplitude, z = spatial frequency, w = speed
+    float4 gMatWaterParams;
 };
 
 Texture2D gDiffuseMap : register(t0);

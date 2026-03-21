@@ -1303,6 +1303,7 @@ void Framework::Draw()
 		mat.DisplacementBias = srcMaterial.DisplacementBias;
 		mat.AlphaCutoff = srcMaterial.AlphaCutoff;
 		mat.WindParams = srcMaterial.WindParams;
+		mat.WaterParams = srcMaterial.WaterParams;
 
 		m_commandList->SetGraphicsRoot32BitConstants(
 			1,
@@ -1335,9 +1336,7 @@ void Framework::Draw()
 		{
 			const UINT materialIndex = (subset.MaterialIndex < m_modelMaterials.size()) ? subset.MaterialIndex : 0;
 			const ModelMaterial& material = m_modelMaterials[materialIndex];
-			const bool usesTessellation =
-				(material.Flags & MaterialFlagHasDisplacementTexture) != 0u &&
-				std::fabs(material.DisplacementScale) > 1e-6f;
+			const bool usesTessellation = (material.Flags & MaterialFlagUseTessellation) != 0u;
 
 			if (!pipelineInitialized || tessellationPipelineActive != usesTessellation)
 			{
@@ -1818,15 +1817,21 @@ void Framework::InitializeSceneDefinitions()
 	sponza.CameraTarget = { 0.0f, 0.15f, 0.0f };
 	sponza.CameraMoveSpeed = 3.0f;
 	sponza.TessellationMinDistance = 0.55f;
-	sponza.TessellationMaxDistance = 2.6f;
-	sponza.TessellationMinFactor = 1.0f;
-	sponza.TessellationMaxFactor = 7.0f;
+	sponza.TessellationMaxDistance = 4.0f;
+	sponza.TessellationMinFactor = 2.0f;
+	sponza.TessellationMaxFactor = 16.0f;
 	sponza.DefaultDisplacementScale = 0.055f;
 	sponza.DefaultDisplacementBias = 0.0f;
 	sponza.AlphaCutoff = 0.33f;
 	sponza.EnableWindAnimation = true;
 	sponza.EnableUvScroll = true;
 	sponza.LightingPreset = SceneLightingPreset::Default;
+	sponza.EnableWaterPlane = true;
+	sponza.WaterPlaneSize = { 1.58f, 1.34f };
+	sponza.WaterPlaneHeight = -0.081f;
+	sponza.WaterPlaneUvScale = 1.0f;
+	sponza.WaterPlaneColor = { 0.18f, 0.56f, 0.84f, 1.0f };
+	sponza.WaterWaveParams = { 0.010f, 10.75f, 5.20f, 2.48f };
 	m_sceneDefinitions.push_back(sponza);
 
 	SceneDefinition bistro = {};
@@ -2779,7 +2784,7 @@ void Framework::BuildSceneGeometryUpload()
 
 	auto DisableDisplacement = [&](ModelMaterial& mat)
 	{
-		mat.Flags &= ~(MaterialFlagHasDisplacementTexture | MaterialFlagDisplacementFromNormal);
+		mat.Flags &= ~(MaterialFlagHasDisplacementTexture | MaterialFlagDisplacementFromNormal | MaterialFlagUseTessellation);
 		mat.TextureIndices[MaterialTextureDisplacementSlot] = defaultDisplacementIndex;
 		mat.DisplacementScale = 0.0f;
 		mat.DisplacementBias = 0.0f;
@@ -2799,6 +2804,7 @@ void Framework::BuildSceneGeometryUpload()
 		if ((mat.Flags & MaterialFlagHasDisplacementTexture) != 0u) {
 			mat.DisplacementScale = scene.DefaultDisplacementScale;
 			mat.DisplacementBias = scene.DefaultDisplacementBias;
+			mat.Flags |= MaterialFlagUseTessellation;
 		}
 		else {
 			DisableDisplacement(mat);
@@ -2831,6 +2837,17 @@ void Framework::BuildSceneGeometryUpload()
 		if (p.x > maxP.x) maxP.x = p.x;
 		if (p.y > maxP.y) maxP.y = p.y;
 		if (p.z > maxP.z) maxP.z = p.z;
+	};
+
+	auto AppendTriangle = [&](std::vector<Vertex>& bucket, Vertex v0, Vertex v1, Vertex v2)
+	{
+		ComputeTriangleNormalAndTangent(v0, v1, v2);
+		bucket.push_back(v0);
+		bucket.push_back(v1);
+		bucket.push_back(v2);
+		ExpandBounds(v0.Pos);
+		ExpandBounds(v1.Pos);
+		ExpandBounds(v2.Pos);
 	};
 
 	std::vector<std::vector<Vertex>> materialVertices(1);
@@ -3279,6 +3296,49 @@ void Framework::BuildSceneGeometryUpload()
 
 			ufbx_free_scene(fbxScene);
 		}
+	}
+
+	if (scene.EnableWaterPlane)
+	{
+		ModelMaterial waterMaterial = MakeDefaultMaterial();
+		waterMaterial.DiffuseAlbedo = scene.WaterPlaneColor;
+		waterMaterial.UvTiling = { scene.WaterPlaneUvScale, scene.WaterPlaneUvScale };
+		waterMaterial.AlphaCutoff = 0.0f;
+		waterMaterial.Flags = MaterialFlagUseTessellation | MaterialFlagProceduralWater;
+		waterMaterial.WaterParams = scene.WaterWaveParams;
+
+		const UINT materialIndex = static_cast<UINT>(m_modelMaterials.size());
+		waterMaterial.SrvBaseIndex = materialIndex * MaterialTextureSlotCount;
+		m_modelMaterials.push_back(waterMaterial);
+		materialVertices.resize(m_modelMaterials.size());
+
+		const float centerX = 0.5f * (minP.x + maxP.x);
+		const float centerZ = 0.5f * (minP.z + maxP.z);
+		const float planeY = minP.y + (maxP.y - minP.y) * scene.WaterPlaneHeight;
+		const float halfWidth = 0.5f * (maxP.x - minP.x) * scene.WaterPlaneSize.x;
+		const float halfDepth = 0.5f * (maxP.z - minP.z) * scene.WaterPlaneSize.y;
+
+		Vertex v0 = {};
+		v0.Pos = { centerX - halfWidth, planeY, centerZ - halfDepth };
+		v0.Normal = { 0.0f, 1.0f, 0.0f };
+		v0.Color = { 1.0f, 1.0f, 1.0f, 1.0f };
+		v0.TexC = { 0.0f, 0.0f };
+
+		Vertex v1 = v0;
+		v1.Pos = { centerX - halfWidth, planeY, centerZ + halfDepth };
+		v1.TexC = { 0.0f, 1.0f };
+
+		Vertex v2 = v0;
+		v2.Pos = { centerX + halfWidth, planeY, centerZ + halfDepth };
+		v2.TexC = { 1.0f, 1.0f };
+
+		Vertex v3 = v0;
+		v3.Pos = { centerX + halfWidth, planeY, centerZ - halfDepth };
+		v3.TexC = { 1.0f, 0.0f };
+
+		std::vector<Vertex>& bucket = materialVertices[materialIndex];
+		AppendTriangle(bucket, v0, v1, v2);
+		AppendTriangle(bucket, v0, v2, v3);
 	}
 
 	std::vector<Vertex> vertices;

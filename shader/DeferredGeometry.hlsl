@@ -3,6 +3,8 @@ static const uint MATERIAL_FLAG_HAS_NORMAL_TEXTURE = 1u << 1;
 static const uint MATERIAL_FLAG_HAS_DISPLACEMENT_TEXTURE = 1u << 2;
 static const uint MATERIAL_FLAG_HAS_OPACITY_TEXTURE = 1u << 3;
 static const uint MATERIAL_FLAG_DISPLACEMENT_FROM_NORMAL = 1u << 4;
+static const uint MATERIAL_FLAG_USE_TESSELLATION = 1u << 5;
+static const uint MATERIAL_FLAG_PROCEDURAL_WATER = 1u << 6;
 
 cbuffer ObjectCB : register(b0)
 {
@@ -45,6 +47,7 @@ cbuffer MaterialCB : register(b2)
     float gMatDisplacementBias;
     float gMatAlphaCutoff;
     float4 gMatWindParams;
+    float4 gMatWaterParams;
 };
 
 Texture2D gBaseColorMap : register(t0);
@@ -94,6 +97,14 @@ struct GBufferOut
     float4 Albedo : SV_Target0;
     float4 Normal : SV_Target1;
     float4 PositionSpec : SV_Target2;
+};
+
+struct SurfaceDisplacementData
+{
+    float3 PosW;
+    float3 NormalW;
+    float3 TangentW;
+    float DebugDisplacement;
 };
 
 float3 SafeNormalize(float3 value, float3 fallback)
@@ -199,6 +210,94 @@ float SampleDebugDisplacement(float2 uv)
     }
 
     return displacement;
+}
+
+bool MaterialUsesProceduralWater()
+{
+    return (gMatFlags & MATERIAL_FLAG_PROCEDURAL_WATER) != 0u && gMatWaterParams.x > 1e-5f;
+}
+
+float EvaluateWaterWave(float2 baseTexC, out float2 displacementGradient)
+{
+    displacementGradient = float2(0.0f, 0.0f);
+    float waveHeight = 0.0f;
+
+    if (MaterialUsesProceduralWater())
+    {
+        float amplitude = gMatWaterParams.x;
+        float frequency = max(gMatWaterParams.y, 0.1f);
+        float speed = gMatWaterParams.z;
+        float secondaryRatio = saturate(gMatWaterParams.w);
+
+        float2 uv = baseTexC * gMatUvTilingOffset.xy * frequency + gMatUvTilingOffset.zw;
+
+        const float2 dir0 = normalize(float2(1.0f, 0.35f));
+        const float2 dir1 = normalize(float2(-0.45f, 1.0f));
+        const float2 dir2 = normalize(float2(0.7f, -0.55f));
+        const float tau = 6.2831853f;
+
+        float phase0 = dot(uv, dir0) * tau + gTime * speed * 1.15f;
+        float phase1 = dot(uv, dir1) * tau * 1.7f - gTime * speed * 1.55f + 1.2f;
+        float phase2 = dot(uv, dir2) * tau * 0.8f + gTime * speed * 0.6f - 0.75f;
+
+        float s0;
+        float c0;
+        float s1;
+        float c1;
+        float s2;
+        float c2;
+        sincos(phase0, s0, c0);
+        sincos(phase1, s1, c1);
+        sincos(phase2, s2, c2);
+
+        waveHeight += amplitude * s0;
+        waveHeight += amplitude * secondaryRatio * s1;
+        waveHeight += amplitude * 0.35f * s2;
+
+        displacementGradient += dir0 * (amplitude * tau * frequency * c0);
+        displacementGradient += dir1 * (amplitude * secondaryRatio * tau * frequency * 1.7f * c1);
+        displacementGradient += dir2 * (amplitude * 0.35f * tau * frequency * 0.8f * c2);
+    }
+
+    return waveHeight;
+}
+
+SurfaceDisplacementData ApplySurfaceDisplacement(ControlPointData cp, float2 uv)
+{
+    SurfaceDisplacementData output;
+    output.PosW = cp.PosW;
+    output.NormalW = cp.NormalW;
+    output.TangentW = cp.TangentW;
+    output.DebugDisplacement = SampleDebugDisplacement(uv);
+
+    if ((gMatFlags & MATERIAL_FLAG_HAS_DISPLACEMENT_TEXTURE) != 0u)
+    {
+        float rawDisplacement = SampleDisplacement(uv);
+        float displacement = rawDisplacement * gMatDisplacementScale + gMatDisplacementBias;
+        output.PosW -= cp.NormalW * displacement;
+        output.DebugDisplacement = max(output.DebugDisplacement, saturate(abs(displacement) * 10.0f));
+    }
+
+    if (MaterialUsesProceduralWater())
+    {
+        float2 displacementGradient = float2(0.0f, 0.0f);
+        float waveHeight = EvaluateWaterWave(cp.BaseTexC, displacementGradient);
+
+        float3 tangentW = output.TangentW - output.NormalW * dot(output.TangentW, output.NormalW);
+        tangentW = SafeNormalize(tangentW, BuildFallbackTangent(output.NormalW));
+        float3 bitangentW = SafeNormalize(cross(output.NormalW, tangentW), float3(0.0f, 0.0f, 1.0f));
+
+        float3 dpdu = tangentW + output.NormalW * displacementGradient.x;
+        float3 dpdv = bitangentW + output.NormalW * displacementGradient.y;
+        float3 waveNormalW = SafeNormalize(cross(dpdv, dpdu), output.NormalW);
+
+        output.PosW += cp.NormalW * waveHeight;
+        output.NormalW = waveNormalW;
+        output.TangentW = SafeNormalize(dpdu - waveNormalW * dot(dpdu, waveNormalW), tangentW);
+        output.DebugDisplacement = max(output.DebugDisplacement, saturate(abs(waveHeight) / max(gMatWaterParams.x, 1e-4f)));
+    }
+
+    return output;
 }
 
 float NormalizeDebugTessFactor(float tessFactor)
@@ -332,14 +431,12 @@ GeometryPSInput DSMain(
     cp.TangentW = SafeNormalize(cp.TangentW, BuildFallbackTangent(cp.NormalW));
 
     float2 uv = ComputeMaterialUv(cp.BaseTexC);
-    float rawDisplacement = SampleDisplacement(uv);
-    float displacement = rawDisplacement * gMatDisplacementScale + gMatDisplacementBias;
-    float3 displacedPosW = cp.PosW - cp.NormalW * displacement;
-
-    float debugDisplacement = SampleDebugDisplacement(uv);
+    SurfaceDisplacementData surface = ApplySurfaceDisplacement(cp, uv);
     float debugTessFactor = NormalizeDebugTessFactor(hsConstData.InsideTess);
 
-    return MakeGeometryOutput(cp, displacedPosW, uv, debugDisplacement, debugTessFactor);
+    cp.NormalW = surface.NormalW;
+    cp.TangentW = surface.TangentW;
+    return MakeGeometryOutput(cp, surface.PosW, uv, surface.DebugDisplacement, debugTessFactor);
 }
 
 GBufferOut PSGBuffer(GeometryPSInput pin)
