@@ -6,6 +6,7 @@
 #include <memory>
 #include <vector>
 #include <cstdint>
+#include <filesystem>
 #include <Windows.h>
 #include <windowsx.h>
 #include "Window.hpp"
@@ -140,8 +141,13 @@ private:
 	void BuildCbvViews();
 	void BuildRootSignature();
 	void BuildPSO();
+	void BuildSceneGeometryUpload();
 	void BuildObjVB_Upload();
 	void BuildSceneLights();
+	void InitializeSceneDefinitions();
+	void LoadScene(size_t sceneIndex, bool resetCamera);
+	void ResetCameraForCurrentScene();
+	void UpdateWindowTitle() const;
 
 	void BuildBoxGeometry();
 
@@ -161,14 +167,58 @@ private:
 		DirectX::XMFLOAT2 UvTiling = { 1.0f, 1.0f };
 		DirectX::XMFLOAT2 UvOffset = { 0.0f, 0.0f };
 		DirectX::XMFLOAT4 WindParams = { 0.0f, 0.0f, 0.0f, 0.0f };
-		bool HasTexture = false;
-		UINT TextureIndex = 0;
+		std::array<UINT, MaterialTextureSlotCount> TextureIndices = {
+			0u, 1u, 2u, 3u
+		};
+		std::uint32_t Flags = 0;
+		float DisplacementScale = 0.0f;
+		float DisplacementBias = 0.0f;
+		float AlphaCutoff = 0.33f;
+		UINT SrvBaseIndex = 0;
 	};
 
 	struct ModelSubset {
 		UINT StartVertex = 0;
 		UINT VertexCount = 0;
 		UINT MaterialIndex = 0;
+	};
+
+	enum class SceneAssetFormat {
+		Obj,
+		Fbx,
+	};
+
+	enum class SceneLightingPreset {
+		Default,
+		Bistro,
+		SanMiguel,
+	};
+
+	struct SceneDefinition {
+		std::wstring Name;
+		std::vector<std::filesystem::path> ModelPaths;
+		SceneAssetFormat Format = SceneAssetFormat::Obj;
+		SceneLightingPreset LightingPreset = SceneLightingPreset::Default;
+		DirectX::XMFLOAT3 CameraPos = { 2.0f, 2.0f, -5.0f };
+		DirectX::XMFLOAT3 CameraTarget = { 0.0f, 0.0f, 0.0f };
+		float CameraMoveSpeed = 3.0f;
+		float TessellationMinDistance = 0.75f;
+		float TessellationMaxDistance = 3.0f;
+		float TessellationMinFactor = 1.0f;
+		float TessellationMaxFactor = 6.0f;
+		float DefaultDisplacementScale = 0.05f;
+		float DefaultDisplacementBias = 0.0f;
+		float AlphaCutoff = 0.33f;
+		bool EnableWindAnimation = true;
+		bool EnableUvScroll = true;
+		bool AllowKeywordedBumpAsDisplacement = false;
+		DirectX::XMFLOAT2 GlobalUvTiling = { 1.0f, 1.0f };
+		DirectX::XMFLOAT4 ForwardAmbient = { 0.2f, 0.2f, 0.2f, 1.0f };
+		DirectX::XMFLOAT4 ForwardDiffuse = { 1.0f, 1.0f, 1.0f, 1.0f };
+		DirectX::XMFLOAT4 ForwardSpecular = { 1.0f, 1.0f, 1.0f, 1.0f };
+		float ForwardSpecPower = 32.0f;
+		float DeferredAmbientIntensity = 0.18f;
+		DirectX::XMFLOAT4 DeferredAmbientColor = { 1.0f, 1.0f, 1.0f, 1.0f };
 	};
 
 	Microsoft::WRL::ComPtr<ID3D12Resource> m_modelVB;
@@ -186,8 +236,14 @@ private:
 	DirectX::XMFLOAT2 m_uvAnimation = { 0.0f, 0.0f };
 	DirectX::XMFLOAT2 m_uvAnimationSpeed = { 0.08f, 0.0f };
 	DirectX::XMFLOAT2 m_uvGlobalTiling = { 1.0f, 1.0f };
+	std::vector<SceneDefinition> m_sceneDefinitions;
+	size_t m_currentSceneIndex = 0;
 	std::array<bool, 256> m_keyDown{}; // состояние VK_*
 	bool m_showBufferDebug = false;
+	float m_tessellationMinDistance = 0.75f;
+	float m_tessellationMaxDistance = 3.0f;
+	float m_tessellationMinFactor = 1.0f;
+	float m_tessellationMaxFactor = 6.0f;
 
 	float m_cameraMoveSpeed = 3.0f;   // units/sec, подстрой под сцену
 

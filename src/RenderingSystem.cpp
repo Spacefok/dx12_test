@@ -52,8 +52,11 @@ D3D12_RASTERIZER_DESC DefaultRasterizer(D3D12_CULL_MODE cullMode)
 
 void RenderingSystem::BuildShaders()
 {
-	m_geometryVsByteCode = CompileShader(L"shader\\DeferredGeometry.hlsl", nullptr, "VS", "vs_5_1");
-	m_geometryPsByteCode = CompileShader(L"shader\\DeferredGeometry.hlsl", nullptr, "PS", "ps_5_1");
+	m_geometryBasicVsByteCode = CompileShader(L"shader\\DeferredGeometry.hlsl", nullptr, "VSBasic", "vs_5_1");
+	m_geometryControlPointVsByteCode = CompileShader(L"shader\\DeferredGeometry.hlsl", nullptr, "VSControlPoint", "vs_5_1");
+	m_geometryHsByteCode = CompileShader(L"shader\\DeferredGeometry.hlsl", nullptr, "HSMain", "hs_5_1");
+	m_geometryDsByteCode = CompileShader(L"shader\\DeferredGeometry.hlsl", nullptr, "DSMain", "ds_5_1");
+	m_geometryPsByteCode = CompileShader(L"shader\\DeferredGeometry.hlsl", nullptr, "PSGBuffer", "ps_5_1");
 
 	m_lightingVsByteCode = CompileShader(L"shader\\DeferredLighting.hlsl", nullptr, "VSFullscreen", "vs_5_1");
 	m_lightingPsByteCode = CompileShader(L"shader\\DeferredLighting.hlsl", nullptr, "PSLighting", "ps_5_1");
@@ -71,7 +74,7 @@ void RenderingSystem::BuildRootSignatures(ID3D12Device* device)
 
 		D3D12_DESCRIPTOR_RANGE srvRange = {};
 		srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-		srvRange.NumDescriptors = 1;
+		srvRange.NumDescriptors = MaterialTextureSlotCount;
 		srvRange.BaseShaderRegister = 0;
 		srvRange.RegisterSpace = 0;
 		srvRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
@@ -92,7 +95,7 @@ void RenderingSystem::BuildRootSignatures(ID3D12Device* device)
 		rootParams[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
 		rootParams[2].DescriptorTable.NumDescriptorRanges = 1;
 		rootParams[2].DescriptorTable.pDescriptorRanges = &srvRange;
-		rootParams[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+		rootParams[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
 		D3D12_STATIC_SAMPLER_DESC sampler = {};
 		sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
@@ -107,7 +110,7 @@ void RenderingSystem::BuildRootSignatures(ID3D12Device* device)
 		sampler.MaxLOD = D3D12_FLOAT32_MAX;
 		sampler.ShaderRegister = 0;
 		sampler.RegisterSpace = 0;
-		sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+		sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
 		D3D12_ROOT_SIGNATURE_DESC rootSigDesc = {};
 		rootSigDesc.NumParameters = _countof(rootParams);
@@ -116,8 +119,6 @@ void RenderingSystem::BuildRootSignatures(ID3D12Device* device)
 		rootSigDesc.pStaticSamplers = &sampler;
 		rootSigDesc.Flags =
 			D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT |
-			D3D12_ROOT_SIGNATURE_FLAG_DENY_HULL_SHADER_ROOT_ACCESS |
-			D3D12_ROOT_SIGNATURE_FLAG_DENY_DOMAIN_SHADER_ROOT_ACCESS |
 			D3D12_ROOT_SIGNATURE_FLAG_DENY_GEOMETRY_SHADER_ROOT_ACCESS;
 
 		m_geometryRootSignature = CreateRootSignature(device, rootSigDesc);
@@ -196,6 +197,9 @@ void RenderingSystem::BuildPSOs(ID3D12Device* device, DXGI_FORMAT backBufferForm
 
 			{ "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 40,
 			  D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+
+			{ "TANGENT",  0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 48,
+			  D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
 		};
 
 		D3D12_BLEND_DESC blendDesc = {};
@@ -232,7 +236,7 @@ void RenderingSystem::BuildPSOs(ID3D12Device* device, DXGI_FORMAT backBufferForm
 		D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
 		psoDesc.InputLayout = { inputLayout, _countof(inputLayout) };
 		psoDesc.pRootSignature = m_geometryRootSignature.Get();
-		psoDesc.VS = { m_geometryVsByteCode->GetBufferPointer(), m_geometryVsByteCode->GetBufferSize() };
+		psoDesc.VS = { m_geometryBasicVsByteCode->GetBufferPointer(), m_geometryBasicVsByteCode->GetBufferSize() };
 		psoDesc.PS = { m_geometryPsByteCode->GetBufferPointer(), m_geometryPsByteCode->GetBufferSize() };
 		psoDesc.RasterizerState = DefaultRasterizer(D3D12_CULL_MODE_BACK);
 		psoDesc.BlendState = blendDesc;
@@ -247,7 +251,80 @@ void RenderingSystem::BuildPSOs(ID3D12Device* device, DXGI_FORMAT backBufferForm
 		psoDesc.SampleDesc.Count = 1;
 		psoDesc.SampleDesc.Quality = 0;
 
-		ThrowIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&m_geometryPso)));
+		ThrowIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&m_geometryBasicPso)));
+	}
+
+	{
+		D3D12_INPUT_ELEMENT_DESC inputLayout[] =
+		{
+			{ "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,
+			  D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+
+			{ "NORMAL",   0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12,
+			  D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+
+			{ "COLOR",    0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 24,
+			  D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+
+			{ "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 40,
+			  D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+
+			{ "TANGENT",  0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 48,
+			  D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+		};
+
+		D3D12_BLEND_DESC blendDesc = {};
+		blendDesc.AlphaToCoverageEnable = FALSE;
+		blendDesc.IndependentBlendEnable = FALSE;
+		{
+			D3D12_RENDER_TARGET_BLEND_DESC rt = {};
+			rt.BlendEnable = FALSE;
+			rt.LogicOpEnable = FALSE;
+			rt.SrcBlend = D3D12_BLEND_ONE;
+			rt.DestBlend = D3D12_BLEND_ZERO;
+			rt.BlendOp = D3D12_BLEND_OP_ADD;
+			rt.SrcBlendAlpha = D3D12_BLEND_ONE;
+			rt.DestBlendAlpha = D3D12_BLEND_ZERO;
+			rt.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+			rt.LogicOp = D3D12_LOGIC_OP_NOOP;
+			rt.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+			blendDesc.RenderTarget[0] = rt;
+		}
+
+		D3D12_DEPTH_STENCIL_DESC dsDesc = {};
+		dsDesc.DepthEnable = TRUE;
+		dsDesc.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+		dsDesc.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
+		dsDesc.StencilEnable = FALSE;
+		dsDesc.StencilReadMask = D3D12_DEFAULT_STENCIL_READ_MASK;
+		dsDesc.StencilWriteMask = D3D12_DEFAULT_STENCIL_WRITE_MASK;
+		dsDesc.FrontFace.StencilFailOp = D3D12_STENCIL_OP_KEEP;
+		dsDesc.FrontFace.StencilDepthFailOp = D3D12_STENCIL_OP_KEEP;
+		dsDesc.FrontFace.StencilPassOp = D3D12_STENCIL_OP_KEEP;
+		dsDesc.FrontFace.StencilFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+		dsDesc.BackFace = dsDesc.FrontFace;
+
+		D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
+		psoDesc.InputLayout = { inputLayout, _countof(inputLayout) };
+		psoDesc.pRootSignature = m_geometryRootSignature.Get();
+		psoDesc.VS = { m_geometryControlPointVsByteCode->GetBufferPointer(), m_geometryControlPointVsByteCode->GetBufferSize() };
+		psoDesc.HS = { m_geometryHsByteCode->GetBufferPointer(), m_geometryHsByteCode->GetBufferSize() };
+		psoDesc.DS = { m_geometryDsByteCode->GetBufferPointer(), m_geometryDsByteCode->GetBufferSize() };
+		psoDesc.PS = { m_geometryPsByteCode->GetBufferPointer(), m_geometryPsByteCode->GetBufferSize() };
+		psoDesc.RasterizerState = DefaultRasterizer(D3D12_CULL_MODE_BACK);
+		psoDesc.BlendState = blendDesc;
+		psoDesc.DepthStencilState = dsDesc;
+		psoDesc.SampleMask = D3D12_DEFAULT_SAMPLE_MASK;
+		psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_PATCH;
+		psoDesc.NumRenderTargets = Gbuffer::kTargetCount;
+		psoDesc.RTVFormats[0] = Gbuffer::kAlbedoFormat;
+		psoDesc.RTVFormats[1] = Gbuffer::kNormalFormat;
+		psoDesc.RTVFormats[2] = Gbuffer::kPositionSpecFormat;
+		psoDesc.DSVFormat = depthStencilFormat;
+		psoDesc.SampleDesc.Count = 1;
+		psoDesc.SampleDesc.Quality = 0;
+
+		ThrowIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&m_geometryTessellationPso)));
 	}
 
 	{

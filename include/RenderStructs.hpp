@@ -18,7 +18,20 @@ struct Vertex {
 	DirectX::XMFLOAT3 Normal;
 	DirectX::XMFLOAT4 Color;
 	DirectX::XMFLOAT2 TexC = { 0.0f, 0.0f };
+	DirectX::XMFLOAT3 Tangent = { 1.0f, 0.0f, 0.0f };
 };
+
+constexpr std::uint32_t MaterialTextureBaseColorSlot = 0;
+constexpr std::uint32_t MaterialTextureNormalSlot = 1;
+constexpr std::uint32_t MaterialTextureDisplacementSlot = 2;
+constexpr std::uint32_t MaterialTextureOpacitySlot = 3;
+constexpr std::uint32_t MaterialTextureSlotCount = 4;
+
+constexpr std::uint32_t MaterialFlagHasBaseColorTexture = 1u << 0;
+constexpr std::uint32_t MaterialFlagHasNormalTexture = 1u << 1;
+constexpr std::uint32_t MaterialFlagHasDisplacementTexture = 1u << 2;
+constexpr std::uint32_t MaterialFlagHasOpacityTexture = 1u << 3;
+constexpr std::uint32_t MaterialFlagDisplacementFromNormal = 1u << 4;
 
 struct alignas(16) ObjectConstants {
 	DirectX::XMFLOAT4X4 World = dx::Identity4x4();
@@ -46,13 +59,17 @@ struct alignas(16) PassConstants {
 
 	float Time = 0.0f;
 	DirectX::XMFLOAT3 _pad3 = { 0.0f, 0.0f, 0.0f };
+
+	DirectX::XMFLOAT4 TessellationParams = { 0.75f, 3.0f, 1.0f, 6.0f }; // x=min dist, y=max dist, z=min factor, w=max factor
 };
 
 struct alignas(16) MaterialConstants {
 	DirectX::XMFLOAT4 DiffuseAlbedo = { 1.0f, 1.0f, 1.0f, 1.0f };
 	DirectX::XMFLOAT4 UvTilingOffset = { 1.0f, 1.0f, 0.0f, 0.0f };
-	std::uint32_t HasTexture = 0;
-	DirectX::XMFLOAT3 _pad = { 0.0f, 0.0f, 0.0f };
+	std::uint32_t Flags = 0;
+	float DisplacementScale = 0.0f;
+	float DisplacementBias = 0.0f;
+	float AlphaCutoff = 0.33f;
 	DirectX::XMFLOAT4 WindParams = { 0.0f, 0.0f, 0.0f, 0.0f }; // x = enabled, y = amplitude, z = spatial frequency, w = speed
 };
 

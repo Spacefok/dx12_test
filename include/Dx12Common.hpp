@@ -65,7 +65,10 @@ inline ComPtr<ID3DBlob> CompileShader(
     {
         const char* msg = (const char*)errors->GetBufferPointer();
         OutputDebugStringA(msg);
-        MessageBoxA(nullptr, msg, "HLSL Compile Error", MB_OK | MB_ICONERROR);
+        if (FAILED(hr))
+        {
+            MessageBoxA(nullptr, msg, "HLSL Compile Error", MB_OK | MB_ICONERROR);
+        }
     }
 
     if (FAILED(hr))
@@ -79,8 +82,9 @@ inline ComPtr<ID3DBlob> CompileShader(
 
 inline UINT CalcConstantBufferByteSize(UINT byteSize)
 {
-    // CBV требует размер кратный 256.
+    // CBV size must be aligned to 256 bytes.
     return (byteSize + 255) & ~255;
 }
 
 #endif // !DX_12_COMMON_HPP
+

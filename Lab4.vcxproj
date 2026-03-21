@@ -133,6 +133,7 @@
     <ClCompile Include="src\Gbuffer.cpp" />
     <ClCompile Include="src\RenderingSystem.cpp" />
     <ClCompile Include="src\Timer.cpp" />
+    <ClCompile Include="src\ufbx.c" />
     <ClCompile Include="src\Window.cpp" />
     <ClCompile Include="src\winMain.cpp" />
   </ItemGroup>
@@ -145,6 +146,7 @@
     <ClInclude Include="include\Timer.hpp" />
     <ClInclude Include="include\tiny_obj_loader.h" />
     <ClInclude Include="include\UploadBuffer.hpp" />
+    <ClInclude Include="include\ufbx.h" />
     <ClInclude Include="include\Window.hpp" />
   </ItemGroup>
   <ItemGroup>

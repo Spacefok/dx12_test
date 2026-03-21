@@ -15,5 +15,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
         MessageBoxA(nullptr, e.what(), "Fatal error", MB_OK | MB_ICONERROR);
         return -1;
     }
+    catch (...)
+    {
+        MessageBoxA(nullptr, "Unknown non-std exception.", "Fatal error", MB_OK | MB_ICONERROR);
+        return -2;
+    }
 
 }

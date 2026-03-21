@@ -162,6 +162,46 @@ float3 EvaluateSpot(SpotLight light, float3 posW, float3 albedo, float3 normalW,
     return result;
 }
 
+float3 NormalizeNormalForLighting(float3 normalW)
+{
+    float3 normalized = float3(0.0f, 1.0f, 0.0f);
+    float len2 = dot(normalW, normalW);
+    if (len2 > 1e-6f)
+    {
+        normalized = normalW * rsqrt(len2);
+    }
+    return normalized;
+}
+
+float3 EvaluateSceneLighting(float3 albedo, float3 normalW, float3 posW, float specPower)
+{
+    float3 viewVec = gEyePosW - posW;
+    float viewLen2 = dot(viewVec, viewVec);
+    float3 viewDir = (viewLen2 > 1e-6f) ? (viewVec * rsqrt(viewLen2)) : float3(0.0f, 0.0f, 1.0f);
+
+    float3 color = albedo * gAmbientColor.rgb * gAmbientIntensity;
+
+    [loop]
+    for (uint dirIndex = 0; dirIndex < gDirectionalLightCount; ++dirIndex)
+    {
+        color += EvaluateDirectional(gDirectionalLights[dirIndex], albedo, normalW, viewDir, specPower);
+    }
+
+    [loop]
+    for (uint pointIndex = 0; pointIndex < gPointLightCount; ++pointIndex)
+    {
+        color += EvaluatePoint(gPointLights[pointIndex], posW, albedo, normalW, viewDir, specPower);
+    }
+
+    [loop]
+    for (uint spotIndex = 0; spotIndex < gSpotLightCount; ++spotIndex)
+    {
+        color += EvaluateSpot(gSpotLights[spotIndex], posW, albedo, normalW, viewDir, specPower);
+    }
+
+    return color;
+}
+
 float3 ReconstructWorldPos(float2 texC, float depth)
 {
     float2 ndc;
@@ -190,6 +230,49 @@ float3 VisualizePosition(float3 posW)
     return absPos / (1.0f + absPos);
 }
 
+float3 HeatMap01(float t)
+{
+    float3 result = float3(0.05f, 0.08f, 0.25f);
+    t = saturate(t);
+
+    const float3 c0 = float3(0.05f, 0.08f, 0.25f);
+    const float3 c1 = float3(0.08f, 0.55f, 0.95f);
+    const float3 c2 = float3(0.95f, 0.83f, 0.18f);
+    const float3 c3 = float3(0.92f, 0.20f, 0.12f);
+
+    if (t < 0.33f)
+    {
+        result = lerp(c0, c1, t / 0.33f);
+    }
+    else if (t < 0.66f)
+    {
+        result = lerp(c1, c2, (t - 0.33f) / 0.33f);
+    }
+    else
+    {
+        result = lerp(c2, c3, (t - 0.66f) / 0.34f);
+    }
+
+    return result;
+}
+
+float3 VisualizeDisplacement(float displacement)
+{
+    displacement = saturate(displacement);
+    return lerp(float3(0.04f, 0.04f, 0.04f), float3(1.00f, 0.74f, 0.18f), displacement);
+}
+
+float3 VisualizeTessFactor(float tessFactor)
+{
+    float3 color = float3(0.10f, 0.02f, 0.02f);
+    tessFactor = saturate(tessFactor);
+    if (tessFactor > 1e-4f)
+    {
+        color = HeatMap01(tessFactor);
+    }
+    return color;
+}
+
 static const uint GLYPH_A = 0u;
 static const uint GLYPH_B = 1u;
 static const uint GLYPH_C = 2u;
@@ -211,6 +294,9 @@ static const uint LABEL_NORMAL = 1u;
 static const uint LABEL_SPEC = 2u;
 static const uint LABEL_DEPTH = 3u;
 static const uint LABEL_POSITION = 4u;
+static const uint LABEL_DISP = 5u;
+static const uint LABEL_TESS = 6u;
+static const uint LABEL_LIT = 7u;
 
 uint GlyphRowBits(uint glyph, uint row)
 {
@@ -326,8 +412,17 @@ float PanelLabelMask(uint labelId, float2 panelUv)
     else if (labelId == LABEL_DEPTH) {
         mask = DrawWord(panelUv, GLYPH_D, GLYPH_E, GLYPH_P, GLYPH_T, GLYPH_H, GLYPH_A, GLYPH_A, GLYPH_A, 5u);
     }
-    else {
+    else if (labelId == LABEL_POSITION) {
         mask = DrawWord(panelUv, GLYPH_P, GLYPH_O, GLYPH_S, GLYPH_I, GLYPH_T, GLYPH_I, GLYPH_O, GLYPH_N, 8u);
+    }
+    else if (labelId == LABEL_DISP) {
+        mask = DrawWord(panelUv, GLYPH_D, GLYPH_I, GLYPH_S, GLYPH_P, GLYPH_A, GLYPH_A, GLYPH_A, GLYPH_A, 4u);
+    }
+    else if (labelId == LABEL_TESS) {
+        mask = DrawWord(panelUv, GLYPH_T, GLYPH_E, GLYPH_S, GLYPH_S, GLYPH_A, GLYPH_A, GLYPH_A, GLYPH_A, 4u);
+    }
+    else {
+        mask = DrawWord(panelUv, GLYPH_L, GLYPH_I, GLYPH_T, GLYPH_A, GLYPH_A, GLYPH_A, GLYPH_A, GLYPH_A, 3u);
     }
 
     return mask;
@@ -344,11 +439,17 @@ float3 ApplyLabelOverlay(float3 panelColor, uint labelId, float2 panelUv)
 
 float3 SampleDebugPanel(uint tileX, uint tileY, float2 panelUv, out uint labelId)
 {
-    float3 albedo = gAlbedoTex.Sample(gSamPointClamp, panelUv).rgb;
-    float3 normalW = gNormalTex.Sample(gSamPointClamp, panelUv).xyz;
-    float specPower = max(gPositionSpecTex.Sample(gSamPointClamp, panelUv).w, 1.0f);
+    float4 albedoSample = gAlbedoTex.Sample(gSamPointClamp, panelUv);
+    float4 normalSample = gNormalTex.Sample(gSamPointClamp, panelUv);
+    float4 positionSpec = gPositionSpecTex.Sample(gSamPointClamp, panelUv);
+    float3 albedo = albedoSample.rgb;
+    float3 normalW = NormalizeNormalForLighting(normalSample.xyz);
+    float debugDisplacement = saturate(normalSample.w);
+    float debugTessFactor = saturate(albedoSample.a);
+    float specPower = max(positionSpec.w, 1.0f);
     float depth = saturate(gDepthTex.Sample(gSamPointClamp, panelUv));
     float3 posW = ReconstructWorldPos(panelUv, depth);
+    float3 litColor = EvaluateSceneLighting(albedo, normalW, posW, specPower);
 
     float3 panel = depth.xxx;
     labelId = LABEL_DEPTH;
@@ -358,9 +459,9 @@ float3 SampleDebugPanel(uint tileX, uint tileY, float2 panelUv, out uint labelId
     else if (tileY == 0u && tileX == 2u) { panel = saturate(specPower / 128.0f).xxx; labelId = LABEL_SPEC; }
     else if (tileY == 1u && tileX == 0u) { panel = depth.xxx; labelId = LABEL_DEPTH; }
     else if (tileY == 1u && tileX == 2u) { panel = VisualizePosition(posW); labelId = LABEL_POSITION; }
-    else if (tileY == 2u && tileX == 0u) { panel = albedo; labelId = LABEL_ALBEDO; }
-    else if (tileY == 2u && tileX == 1u) { panel = VisualizeNormal(normalW); labelId = LABEL_NORMAL; }
-    else if (tileY == 2u && tileX == 2u) { panel = depth.xxx; labelId = LABEL_DEPTH; }
+    else if (tileY == 2u && tileX == 0u) { panel = VisualizeDisplacement(debugDisplacement); labelId = LABEL_DISP; }
+    else if (tileY == 2u && tileX == 1u) { panel = VisualizeTessFactor(debugTessFactor); labelId = LABEL_TESS; }
+    else if (tileY == 2u && tileX == 2u) { panel = litColor; labelId = LABEL_LIT; }
 
     return panel;
 }
@@ -373,38 +474,8 @@ float4 PSLighting(FullscreenOut pin) : SV_Target
     float depth = gDepthTex.Sample(gSamPointClamp, pin.TexC);
     float3 posW = ReconstructWorldPos(pin.TexC, saturate(depth));
 
-    if (dot(normalW, normalW) < 1e-6f)
-    {
-        normalW = float3(0.0f, 1.0f, 0.0f);
-    }
-    else
-    {
-        normalW = normalize(normalW);
-    }
-
-    float3 viewVec = gEyePosW - posW;
-    float viewLen2 = dot(viewVec, viewVec);
-    float3 viewDir = (viewLen2 > 1e-6f) ? (viewVec * rsqrt(viewLen2)) : float3(0.0f, 0.0f, 1.0f);
-
-    float3 color = albedo * gAmbientColor.rgb * gAmbientIntensity;
-
-    [loop]
-    for (uint dirIndex = 0; dirIndex < gDirectionalLightCount; ++dirIndex)
-    {
-        color += EvaluateDirectional(gDirectionalLights[dirIndex], albedo, normalW, viewDir, specPower);
-    }
-
-    [loop]
-    for (uint pointIndex = 0; pointIndex < gPointLightCount; ++pointIndex)
-    {
-        color += EvaluatePoint(gPointLights[pointIndex], posW, albedo, normalW, viewDir, specPower);
-    }
-
-    [loop]
-    for (uint spotIndex = 0; spotIndex < gSpotLightCount; ++spotIndex)
-    {
-        color += EvaluateSpot(gSpotLights[spotIndex], posW, albedo, normalW, viewDir, specPower);
-    }
+    normalW = NormalizeNormalForLighting(normalW);
+    float3 color = EvaluateSceneLighting(albedo, normalW, posW, specPower);
 
     if (gDebugViewEnabled != 0u)
     {

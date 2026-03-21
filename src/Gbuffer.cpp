@@ -49,6 +49,10 @@ void Gbuffer::Resize(ID3D12Device* device, UINT width, UINT height, UINT rtvDesc
 
 	D3D12_HEAP_PROPERTIES defaultHeap = {};
 	defaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
+	defaultHeap.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+	defaultHeap.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
+	defaultHeap.CreationNodeMask = 1;
+	defaultHeap.VisibleNodeMask = 1;
 
 	for (UINT i = 0; i < kTargetCount; ++i)
 	{
