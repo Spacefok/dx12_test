@@ -712,6 +712,71 @@ void ComputeTriangleNormalAndTangent(Vertex& v0, Vertex& v1, Vertex& v2)
 	v2.Tangent = tangent;
 }
 
+ObjectConstants MakeObjectConstantsFromWorld(DirectX::FXMMATRIX world)
+{
+	ObjectConstants obj = {};
+	DirectX::XMStoreFloat4x4(&obj.World, DirectX::XMMatrixTranspose(world));
+	DirectX::XMStoreFloat4x4(&obj.WorldInvTranspose, DirectX::XMMatrixTranspose(DirectX::XMMatrixInverse(nullptr, world)));
+	return obj;
+}
+
+void AppendDoubleSidedQuad(
+	std::vector<Vertex>& vertices,
+	const DirectX::XMFLOAT3& p0,
+	const DirectX::XMFLOAT3& p1,
+	const DirectX::XMFLOAT3& p2,
+	const DirectX::XMFLOAT3& p3)
+{
+	Vertex v0 = {};
+	v0.Pos = p0;
+	v0.Color = { 1.0f, 1.0f, 1.0f, 1.0f };
+	v0.TexC = { 0.0f, 1.0f };
+
+	Vertex v1 = v0;
+	v1.Pos = p1;
+	v1.TexC = { 0.0f, 0.0f };
+
+	Vertex v2 = v0;
+	v2.Pos = p2;
+	v2.TexC = { 1.0f, 0.0f };
+
+	Vertex v3 = v0;
+	v3.Pos = p3;
+	v3.TexC = { 1.0f, 1.0f };
+
+	Vertex front0 = v0;
+	Vertex front1 = v1;
+	Vertex front2 = v2;
+	ComputeTriangleNormalAndTangent(front0, front1, front2);
+	vertices.push_back(front0);
+	vertices.push_back(front1);
+	vertices.push_back(front2);
+
+	Vertex front3a = v0;
+	Vertex front3b = v2;
+	Vertex front3c = v3;
+	ComputeTriangleNormalAndTangent(front3a, front3b, front3c);
+	vertices.push_back(front3a);
+	vertices.push_back(front3b);
+	vertices.push_back(front3c);
+
+	Vertex back0 = v0;
+	Vertex back1 = v2;
+	Vertex back2 = v1;
+	ComputeTriangleNormalAndTangent(back0, back1, back2);
+	vertices.push_back(back0);
+	vertices.push_back(back1);
+	vertices.push_back(back2);
+
+	Vertex back3a = v0;
+	Vertex back3b = v3;
+	Vertex back3c = v2;
+	ComputeTriangleNormalAndTangent(back3a, back3b, back3c);
+	vertices.push_back(back3a);
+	vertices.push_back(back3b);
+	vertices.push_back(back3c);
+}
+
 enum class AabbFrustumRelation {
 	Outside,
 	Intersects,
@@ -1538,6 +1603,7 @@ void Framework::Update(const double& dt)
 	XMMATRIX proj = XMMatrixPerspectiveFovLH(0.25f * XM_PI, aspect, 0.1f, 1000.0f);
 
 	XMMATRIX viewProj = view * proj;
+	UpdateDynamicSceneObjects();
 	UpdateVisibleObjects(viewProj);
 
 	PassConstants pass{};
@@ -1616,6 +1682,43 @@ void Framework::Update(const double& dt)
 
 	m_deferredPassCB->CopyData(0, deferred);
 	UpdateWindowTitle();
+}
+
+void Framework::UpdateDynamicSceneObjects()
+{
+	using namespace DirectX;
+
+	if (!m_objectCB || m_sceneObjects.empty()) {
+		return;
+	}
+
+	for (UINT objectIndex = 0; objectIndex < static_cast<UINT>(m_sceneObjects.size()); ++objectIndex)
+	{
+		SceneObject& sceneObject = m_sceneObjects[objectIndex];
+		if (sceneObject.Geometry != SceneObjectGeometry::TreeBillboard) {
+			continue;
+		}
+
+		XMFLOAT3 toCamera = {
+			m_camPos.x - sceneObject.Anchor.x,
+			0.0f,
+			m_camPos.z - sceneObject.Anchor.z
+		};
+
+		const float lengthSq = toCamera.x * toCamera.x + toCamera.z * toCamera.z;
+		if (lengthSq <= 1e-6f) {
+			toCamera = { 0.0f, 0.0f, 1.0f };
+		}
+
+		const float yaw = std::atan2(toCamera.x, toCamera.z);
+		const XMMATRIX world =
+			XMMatrixScaling(sceneObject.BillboardScale.x, sceneObject.BillboardScale.y, sceneObject.BillboardScale.x) *
+			XMMatrixRotationY(yaw) *
+			XMMatrixTranslation(sceneObject.Anchor.x, sceneObject.Anchor.y, sceneObject.Anchor.z);
+
+		sceneObject.Constants = MakeObjectConstantsFromWorld(world);
+		m_objectCB->CopyData(objectIndex, sceneObject.Constants);
+	}
 }
 
 void Framework::Draw()
@@ -1714,6 +1817,53 @@ void Framework::Draw()
 						}
 					}
 
+					BindMaterial(material);
+					m_commandList->DrawInstanced(subset.VertexCount, 1, subset.StartVertex, 0);
+				}
+			}
+			else if (sceneObject.Geometry == SceneObjectGeometry::TreeModel && m_treeVB && !m_treeModelSubsets.empty())
+			{
+				m_commandList->IASetVertexBuffers(0, 1, &m_treeVBV);
+				bool tessellationPipelineActive = false;
+				bool pipelineInitialized = false;
+
+				for (const ModelSubset& subset : m_treeModelSubsets)
+				{
+					const UINT materialIndex = (subset.MaterialIndex < m_modelMaterials.size()) ? subset.MaterialIndex : 0;
+					const ModelMaterial& material = m_modelMaterials[materialIndex];
+					const bool usesTessellation = (material.Flags & MaterialFlagUseTessellation) != 0u;
+
+					if (!pipelineInitialized || tessellationPipelineActive != usesTessellation)
+					{
+						tessellationPipelineActive = usesTessellation;
+						pipelineInitialized = true;
+
+						if (tessellationPipelineActive)
+						{
+							m_commandList->SetPipelineState(m_renderingSystem.GeometryTessellationPSO());
+							m_commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST);
+						}
+						else
+						{
+							m_commandList->SetPipelineState(m_renderingSystem.GeometryBasicPSO());
+							m_commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+						}
+					}
+
+					BindMaterial(material);
+					m_commandList->DrawInstanced(subset.VertexCount, 1, subset.StartVertex, 0);
+				}
+			}
+			else if (sceneObject.Geometry == SceneObjectGeometry::TreeBillboard && m_treeBillboardVB && !m_treeBillboardSubsets.empty())
+			{
+				m_commandList->SetPipelineState(m_renderingSystem.GeometryBasicPSO());
+				m_commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+				m_commandList->IASetVertexBuffers(0, 1, &m_treeBillboardVBV);
+
+				for (const ModelSubset& subset : m_treeBillboardSubsets)
+				{
+					const UINT materialIndex = (subset.MaterialIndex < m_modelMaterials.size()) ? subset.MaterialIndex : 0;
+					const ModelMaterial& material = m_modelMaterials[materialIndex];
 					BindMaterial(material);
 					m_commandList->DrawInstanced(subset.VertexCount, 1, subset.StartVertex, 0);
 				}
@@ -2317,6 +2467,9 @@ void Framework::InitializeSceneDefinitions()
 	cullingLab.ScatterOccluderCount = 28;
 	cullingLab.ScatterBoxCount = 1800;
 	cullingLab.ScatterBoxScaleRange = { 0.30f, 1.20f };
+	cullingLab.ScatterTreeCount = 28;
+	cullingLab.ScatterTreeScaleRange = { 0.040f, 0.058f };
+	cullingLab.ScatterTreeBillboardDistance = 24.0f;
 	cullingLab.ForwardAmbient = { 0.16f, 0.18f, 0.22f, 1.0f };
 	cullingLab.ForwardDiffuse = { 0.98f, 0.96f, 0.92f, 1.0f };
 	cullingLab.ForwardSpecular = { 0.95f, 0.96f, 1.00f, 1.0f };
@@ -2429,14 +2582,6 @@ void Framework::BuildSceneObjects()
 
 	const SceneDefinition& scene = m_sceneDefinitions[m_currentSceneIndex];
 
-	auto MakeObjectConstantsFromWorld = [](FXMMATRIX world) -> ObjectConstants
-	{
-		ObjectConstants obj = {};
-		XMStoreFloat4x4(&obj.World, XMMatrixTranspose(world));
-		XMStoreFloat4x4(&obj.WorldInvTranspose, XMMatrixTranspose(XMMatrixInverse(nullptr, world)));
-		return obj;
-	};
-
 	auto ComputeBoxBoundsFromWorld = [](FXMMATRIX world) -> Aabb
 	{
 		const XMFLOAT3 localCorners[8] = {
@@ -2478,6 +2623,51 @@ void Framework::BuildSceneObjects()
 		boxObject.Occluder = occluder;
 		m_sceneObjects.push_back(boxObject);
 		++m_boxObjectCount;
+	};
+
+	auto AddTreeLodObjects = [&](const XMFLOAT3& position, float scale, float yaw)
+	{
+		if (!IsAabbValid(m_treeLocalBounds) ||
+			m_treeModelSubsets.empty() ||
+			m_treeBillboardSubsets.empty() ||
+			m_treeLocalHeight <= 1e-4f ||
+			m_treeLocalRadius <= 1e-4f)
+		{
+			return;
+		}
+
+		const float treeHeight = m_treeLocalHeight * scale;
+		const float treeRadius = m_treeLocalRadius * scale;
+		const float paddedRadius = treeRadius * 1.20f;
+		const float paddedHeight = treeHeight * 1.06f;
+		const Aabb treeBounds = MakeAabbFromCenterExtents(
+			{ position.x, position.y + paddedHeight * 0.5f, position.z },
+			{ paddedRadius, paddedHeight * 0.5f, paddedRadius });
+
+		SceneObject treeModelObject = {};
+		treeModelObject.Geometry = SceneObjectGeometry::TreeModel;
+		treeModelObject.MaterialIndex = m_treeBarkMaterialIndex;
+		treeModelObject.Constants = MakeObjectConstantsFromWorld(
+			XMMatrixScaling(scale, scale, scale) *
+			XMMatrixRotationY(yaw) *
+			XMMatrixTranslation(position.x, position.y, position.z));
+		treeModelObject.Bounds = treeBounds;
+		treeModelObject.Occluder = false;
+		treeModelObject.LodMaxDistance = scene.ScatterTreeBillboardDistance;
+		m_sceneObjects.push_back(treeModelObject);
+
+		SceneObject billboardObject = {};
+		billboardObject.Geometry = SceneObjectGeometry::TreeBillboard;
+		billboardObject.MaterialIndex = m_treeLeafMaterialIndex;
+		billboardObject.Constants = MakeObjectConstantsFromWorld(
+			XMMatrixScaling(treeRadius * 1.15f, treeHeight, treeRadius * 1.15f) *
+			XMMatrixTranslation(position.x, position.y, position.z));
+		billboardObject.Bounds = treeBounds;
+		billboardObject.Occluder = false;
+		billboardObject.Anchor = position;
+		billboardObject.BillboardScale = { treeRadius * 1.15f, treeHeight };
+		billboardObject.LodMinDistance = scene.ScatterTreeBillboardDistance;
+		m_sceneObjects.push_back(billboardObject);
 	};
 
 	if (!scene.EnableScatterField && m_modelVertexCount > 0 && IsAabbValid(m_normalizedSceneBounds))
@@ -2536,7 +2726,7 @@ void Framework::BuildSceneObjects()
 		const float groundY = m_normalizedSceneBounds.Min.y;
 		const UINT opaqueMaterialCount = static_cast<UINT>(m_scatterMaterialIndices.size() >= 5 ? 5 : m_scatterMaterialIndices.size());
 
-		m_sceneObjects.reserve(m_sceneObjects.size() + boxCount + scene.ScatterOccluderCount + 1);
+		m_sceneObjects.reserve(m_sceneObjects.size() + boxCount + scene.ScatterOccluderCount + scene.ScatterTreeCount * 2u + 1u);
 
 		if (!m_scatterMaterialIndices.empty())
 		{
@@ -2623,6 +2813,43 @@ void Framework::BuildSceneObjects()
 				RandomRange(rng, 0.0f, XM_2PI),
 				materialIndex,
 				!transparent);
+		}
+
+		if (scene.ScatterTreeCount > 0 && !m_treeModelSubsets.empty() && !m_treeBillboardSubsets.empty())
+		{
+			const float treeMinScale = scene.ScatterTreeScaleRange.x;
+			const float treeMaxScale = (std::max)(scene.ScatterTreeScaleRange.x, scene.ScatterTreeScaleRange.y);
+			const float ringRadiusMin = (std::min)(width, depth) * 0.40f;
+			const float ringRadiusMax = (std::min)(width, depth) * 0.495f;
+
+			for (UINT treeIndex = 0; treeIndex < scene.ScatterTreeCount; ++treeIndex)
+			{
+				const float scale = RandomRange(rng, treeMinScale, treeMaxScale);
+				const float treeRadius = m_treeLocalRadius * scale * 1.25f;
+
+				float centerX = 0.0f;
+				float centerZ = 0.0f;
+
+				for (UINT attempt = 0; attempt < 24; ++attempt)
+				{
+					const float angle = RandomRange(rng, 0.0f, XM_2PI);
+					const float radius = RandomRange(rng, ringRadiusMin, ringRadiusMax);
+					centerX = std::cos(angle) * radius + RandomRange(rng, -0.08f, 0.08f) * width;
+					centerZ = std::sin(angle) * radius + RandomRange(rng, -0.08f, 0.08f) * depth;
+					centerX = std::clamp(centerX, scatterMinX + treeRadius, scatterMaxX - treeRadius);
+					centerZ = std::clamp(centerZ, scatterMinZ + treeRadius, scatterMaxZ - treeRadius);
+
+					const float radialDistanceSq = centerX * centerX + centerZ * centerZ;
+					if (radialDistanceSq >= ringRadiusMin * ringRadiusMin * 0.70f) {
+						break;
+					}
+				}
+
+				AddTreeLodObjects(
+					{ centerX, groundY, centerZ },
+					scale,
+					RandomRange(rng, 0.0f, XM_2PI));
+			}
 		}
 	}
 
@@ -2745,6 +2972,7 @@ void Framework::UpdateVisibleObjects(const DirectX::XMMATRIX& viewProj)
 	}
 
 	const SceneDefinition& scene = m_sceneDefinitions[m_currentSceneIndex];
+	const XMFLOAT3 eyePos = m_camPos;
 	std::vector<UINT> candidateObjectIndices;
 
 	if (!m_enableFrustumCulling)
@@ -2831,6 +3059,32 @@ void Framework::UpdateVisibleObjects(const DirectX::XMMATRIX& viewProj)
 		}
 	}
 
+	candidateObjectIndices.erase(
+		std::remove_if(
+			candidateObjectIndices.begin(),
+			candidateObjectIndices.end(),
+			[&](UINT objectIndex)
+			{
+				if (objectIndex >= m_sceneObjects.size()) {
+					return true;
+				}
+
+				const SceneObject& object = m_sceneObjects[objectIndex];
+				if (object.LodMinDistance <= 0.0f &&
+					object.LodMaxDistance >= (std::numeric_limits<float>::max)() * 0.5f)
+				{
+					return false;
+				}
+
+				const XMFLOAT3 center = AabbCenter(object.Bounds);
+				const float dx = center.x - eyePos.x;
+				const float dy = center.y - eyePos.y;
+				const float dz = center.z - eyePos.z;
+				const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+				return distance < object.LodMinDistance || distance >= object.LodMaxDistance;
+			}),
+		candidateObjectIndices.end());
+
 	auto IsTransparentObject = [&](UINT objectIndex) -> bool
 	{
 		const SceneObject& object = m_sceneObjects[objectIndex];
@@ -2848,7 +3102,6 @@ void Framework::UpdateVisibleObjects(const DirectX::XMMATRIX& viewProj)
 
 	if (scene.EnableScatterField && m_enableOcclusionCulling)
 	{
-		const XMFLOAT3 eyePos = m_camPos;
 		std::sort(
 			candidateObjectIndices.begin(),
 			candidateObjectIndices.end(),
@@ -3700,6 +3953,21 @@ void Framework::BuildSceneGeometryUpload()
 	m_modelVB.Reset();
 	m_modelVBUpload.Reset();
 	m_modelVertexCount = 0;
+	m_treeVB.Reset();
+	m_treeVBUpload.Reset();
+	m_treeVBV = {};
+	m_treeVertexCount = 0;
+	m_treeModelSubsets.clear();
+	m_treeBillboardVB.Reset();
+	m_treeBillboardVBUpload.Reset();
+	m_treeBillboardVBV = {};
+	m_treeBillboardVertexCount = 0;
+	m_treeBillboardSubsets.clear();
+	m_treeLocalBounds = {};
+	m_treeLocalRadius = 0.0f;
+	m_treeLocalHeight = 0.0f;
+	m_treeBarkMaterialIndex = 0;
+	m_treeLeafMaterialIndex = 0;
 
 	std::vector<LoadedTextureData> textureImages;
 	textureImages.reserve(64);
@@ -4351,6 +4619,328 @@ void Framework::BuildSceneGeometryUpload()
 		AppendTriangle(bucket, v0, v2, v3);
 	}
 
+	std::vector<Vertex> treeVertices;
+	std::vector<Vertex> treeBillboardVertices;
+
+	if (scene.EnableScatterField)
+	{
+		const std::filesystem::path treeModelPath = std::filesystem::path(L"assets") / L"chestnut" / L"AL05m.obj";
+		if (std::filesystem::exists(treeModelPath))
+		{
+			const std::string objPathUtf8 = treeModelPath.u8string();
+			const std::string baseDirUtf8 = treeModelPath.parent_path().u8string();
+
+			tinyobj::attrib_t attrib;
+			std::vector<tinyobj::shape_t> shapes;
+			std::vector<tinyobj::material_t> tinyMaterials;
+			std::string warn;
+			std::string err;
+
+			const bool ok = tinyobj::LoadObj(
+				&attrib, &shapes, &tinyMaterials,
+				&warn, &err,
+				objPathUtf8.c_str(),
+				baseDirUtf8.empty() ? nullptr : baseDirUtf8.c_str(),
+				true);
+
+			if (!warn.empty()) {
+				OutputDebugStringA(("[tinyobj chestnut warn] " + warn + "\n").c_str());
+			}
+			if (!err.empty()) {
+				OutputDebugStringA(("[tinyobj chestnut err ] " + err + "\n").c_str());
+			}
+			if (!ok) {
+				throw std::runtime_error("Failed to load chestnut OBJ.");
+			}
+
+			std::vector<UINT> treeMaterialIndices;
+			treeMaterialIndices.reserve(tinyMaterials.size());
+			m_treeBarkMaterialIndex = 0;
+			m_treeLeafMaterialIndex = 0;
+
+			for (const tinyobj::material_t& srcMaterial : tinyMaterials)
+			{
+				ModelMaterial mat = MakeDefaultMaterial();
+				mat.DiffuseAlbedo = {
+					static_cast<float>(srcMaterial.diffuse[0]),
+					static_cast<float>(srcMaterial.diffuse[1]),
+					static_cast<float>(srcMaterial.diffuse[2]),
+					static_cast<float>(srcMaterial.dissolve > 0.0f ? srcMaterial.dissolve : 1.0f)
+				};
+
+				float uScale = static_cast<float>(srcMaterial.diffuse_texopt.scale[0]);
+				float vScale = static_cast<float>(srcMaterial.diffuse_texopt.scale[1]);
+				if (std::fabs(uScale) < 1e-6f) uScale = 1.0f;
+				if (std::fabs(vScale) < 1e-6f) vScale = 1.0f;
+
+				mat.UvTiling = { uScale, vScale };
+				mat.UvOffset = {
+					static_cast<float>(srcMaterial.diffuse_texopt.origin_offset[0]),
+					static_cast<float>(srcMaterial.diffuse_texopt.origin_offset[1])
+				};
+
+				const std::string materialNameLower = ToLowerCopy(srcMaterial.name);
+
+				const std::filesystem::path baseColorPath = ResolveSceneTexturePathUtf8(treeModelPath, srcMaterial.diffuse_texname);
+				if (!baseColorPath.empty()) {
+					mat.TextureIndices[MaterialTextureBaseColorSlot] = AcquireTextureIndex(baseColorPath, defaultBaseColorIndex);
+					mat.Flags |= MaterialFlagHasBaseColorTexture;
+				}
+
+				const std::filesystem::path explicitNormalPath = ResolveSceneTexturePathUtf8(treeModelPath, srcMaterial.normal_texname);
+				const std::filesystem::path bumpPath = ResolveSceneTexturePathUtf8(treeModelPath, srcMaterial.bump_texname);
+				std::filesystem::path normalPath = explicitNormalPath;
+				std::filesystem::path displacementPath = ResolveSceneTexturePathUtf8(treeModelPath, srcMaterial.displacement_texname);
+				const bool bumpActsAsDisplacement =
+					scene.AllowKeywordedBumpAsDisplacement &&
+					displacementPath.empty() &&
+					LooksLikeDisplacementMapPath(bumpPath);
+
+				if (displacementPath.empty() && bumpActsAsDisplacement) {
+					displacementPath = bumpPath;
+				}
+
+				if (normalPath.empty() && !bumpPath.empty() && !bumpActsAsDisplacement) {
+					normalPath = bumpPath;
+				}
+
+				const bool displacementLooksLikeNormal = LooksLikeNormalMapPath(displacementPath);
+				if (!normalPath.empty()) {
+					mat.TextureIndices[MaterialTextureNormalSlot] = AcquireTextureIndex(normalPath, defaultNormalIndex);
+					mat.Flags |= MaterialFlagHasNormalTexture;
+				}
+				else if (!displacementPath.empty() && displacementLooksLikeNormal) {
+					mat.TextureIndices[MaterialTextureNormalSlot] = AcquireTextureIndex(displacementPath, defaultNormalIndex);
+					mat.Flags |= MaterialFlagHasNormalTexture;
+				}
+
+				if (!displacementPath.empty() && !displacementLooksLikeNormal) {
+					mat.TextureIndices[MaterialTextureDisplacementSlot] = AcquireTextureIndex(displacementPath, defaultDisplacementIndex);
+					mat.Flags |= MaterialFlagHasDisplacementTexture;
+				}
+
+				const std::filesystem::path opacityPath = ResolveSceneTexturePathUtf8(treeModelPath, srcMaterial.alpha_texname);
+				if (!opacityPath.empty()) {
+					mat.TextureIndices[MaterialTextureOpacitySlot] = AcquireTextureIndex(opacityPath, defaultOpacityIndex);
+					mat.Flags |= MaterialFlagHasOpacityTexture;
+				}
+
+				FinalizeMaterial(mat, materialNameLower);
+
+				const UINT materialIndex = static_cast<UINT>(m_modelMaterials.size());
+				mat.SrvBaseIndex = materialIndex * MaterialTextureSlotCount;
+				m_modelMaterials.push_back(mat);
+				treeMaterialIndices.push_back(materialIndex);
+
+				if (m_treeBarkMaterialIndex == 0 && ContainsAny(materialNameLower, { "bark", "twig" })) {
+					m_treeBarkMaterialIndex = materialIndex;
+				}
+				if (m_treeLeafMaterialIndex == 0 && ContainsAny(materialNameLower, { "leaf" })) {
+					m_treeLeafMaterialIndex = materialIndex;
+				}
+			}
+
+			if (m_treeBarkMaterialIndex == 0 && !treeMaterialIndices.empty()) {
+				m_treeBarkMaterialIndex = treeMaterialIndices.front();
+			}
+			if (m_treeLeafMaterialIndex == 0) {
+				m_treeLeafMaterialIndex = m_treeBarkMaterialIndex;
+			}
+
+			std::vector<std::vector<Vertex>> treeMaterialVertices(m_modelMaterials.size());
+			XMFLOAT3 treeMinP = { +FLT_MAX, +FLT_MAX, +FLT_MAX };
+			XMFLOAT3 treeMaxP = { -FLT_MAX, -FLT_MAX, -FLT_MAX };
+
+			auto ExpandTreeBounds = [&](const XMFLOAT3& p)
+			{
+				treeMinP.x = (std::min)(treeMinP.x, p.x);
+				treeMinP.y = (std::min)(treeMinP.y, p.y);
+				treeMinP.z = (std::min)(treeMinP.z, p.z);
+				treeMaxP.x = (std::max)(treeMaxP.x, p.x);
+				treeMaxP.y = (std::max)(treeMaxP.y, p.y);
+				treeMaxP.z = (std::max)(treeMaxP.z, p.z);
+			};
+
+			const bool hasNormals = !attrib.normals.empty();
+			const bool hasTexcoords = !attrib.texcoords.empty();
+
+			auto ReadPos = [&](int vIdx) -> XMFLOAT3
+			{
+				if (vIdx < 0) {
+					return { 0.0f, 0.0f, 0.0f };
+				}
+				const size_t i = static_cast<size_t>(vIdx);
+				return {
+					attrib.vertices[3 * i + 0],
+					attrib.vertices[3 * i + 1],
+					attrib.vertices[3 * i + 2]
+				};
+			};
+
+			auto ReadNormal = [&](int nIdx) -> XMFLOAT3
+			{
+				if (!hasNormals || nIdx < 0) {
+					return { 0.0f, 0.0f, 0.0f };
+				}
+				const size_t i = static_cast<size_t>(nIdx);
+				return {
+					attrib.normals[3 * i + 0],
+					attrib.normals[3 * i + 1],
+					attrib.normals[3 * i + 2]
+				};
+			};
+
+			auto ReadTexCoord = [&](int tIdx) -> XMFLOAT2
+			{
+				if (!hasTexcoords || tIdx < 0) {
+					return { 0.0f, 0.0f };
+				}
+				const size_t i = static_cast<size_t>(tIdx);
+				return {
+					attrib.texcoords[2 * i + 0],
+					1.0f - attrib.texcoords[2 * i + 1]
+				};
+			};
+
+			for (const tinyobj::shape_t& shape : shapes)
+			{
+				size_t indexOffset = 0;
+				for (size_t faceIndex = 0; faceIndex < shape.mesh.num_face_vertices.size(); ++faceIndex)
+				{
+					const int fv = shape.mesh.num_face_vertices[faceIndex];
+					if (fv != 3) {
+						indexOffset += static_cast<size_t>(fv);
+						continue;
+					}
+
+					UINT materialIndex = m_treeBarkMaterialIndex;
+					if (faceIndex < shape.mesh.material_ids.size())
+					{
+						const int tinyMatId = shape.mesh.material_ids[faceIndex];
+						if (tinyMatId >= 0 && tinyMatId < static_cast<int>(treeMaterialIndices.size())) {
+							materialIndex = treeMaterialIndices[static_cast<size_t>(tinyMatId)];
+						}
+					}
+					if (materialIndex >= treeMaterialVertices.size()) {
+						materialIndex = m_treeBarkMaterialIndex;
+					}
+
+					Vertex tri[3] = {};
+					for (int vertexIndex = 0; vertexIndex < 3; ++vertexIndex)
+					{
+						const tinyobj::index_t idx = shape.mesh.indices[indexOffset + static_cast<size_t>(vertexIndex)];
+						tri[vertexIndex].Pos = ReadPos(idx.vertex_index);
+						tri[vertexIndex].Normal = ReadNormal(idx.normal_index);
+						tri[vertexIndex].Color = { 1.0f, 1.0f, 1.0f, 1.0f };
+						tri[vertexIndex].TexC = ReadTexCoord(idx.texcoord_index);
+						ExpandTreeBounds(tri[vertexIndex].Pos);
+					}
+
+					ComputeTriangleNormalAndTangent(tri[0], tri[1], tri[2]);
+					treeMaterialVertices[materialIndex].push_back(tri[0]);
+					treeMaterialVertices[materialIndex].push_back(tri[1]);
+					treeMaterialVertices[materialIndex].push_back(tri[2]);
+					indexOffset += 3;
+				}
+			}
+
+			if (treeMinP.x <= treeMaxP.x && treeMinP.y <= treeMaxP.y && treeMinP.z <= treeMaxP.z)
+			{
+				const float centerX = 0.5f * (treeMinP.x + treeMaxP.x);
+				const float centerZ = 0.5f * (treeMinP.z + treeMaxP.z);
+				const float minY = treeMinP.y;
+
+				for (std::vector<Vertex>& bucket : treeMaterialVertices)
+				{
+					for (Vertex& vertex : bucket)
+					{
+						vertex.Pos.x -= centerX;
+						vertex.Pos.y -= minY;
+						vertex.Pos.z -= centerZ;
+					}
+				}
+
+				m_treeLocalBounds = {
+					{ treeMinP.x - centerX, 0.0f, treeMinP.z - centerZ },
+					{ treeMaxP.x - centerX, treeMaxP.y - minY, treeMaxP.z - centerZ }
+				};
+				m_treeLocalHeight = m_treeLocalBounds.Max.y - m_treeLocalBounds.Min.y;
+				m_treeLocalRadius = (std::max)(
+					0.5f * (m_treeLocalBounds.Max.x - m_treeLocalBounds.Min.x),
+					0.5f * (m_treeLocalBounds.Max.z - m_treeLocalBounds.Min.z));
+			}
+
+			for (UINT materialIndex = 0; materialIndex < static_cast<UINT>(treeMaterialVertices.size()); ++materialIndex)
+			{
+				const std::vector<Vertex>& bucket = treeMaterialVertices[materialIndex];
+				if (bucket.empty()) {
+					continue;
+				}
+
+				ModelSubset subset = {};
+				subset.MaterialIndex = materialIndex;
+				subset.StartVertex = static_cast<UINT>(treeVertices.size());
+				subset.VertexCount = static_cast<UINT>(bucket.size());
+				m_treeModelSubsets.push_back(subset);
+				treeVertices.insert(treeVertices.end(), bucket.begin(), bucket.end());
+			}
+
+			if (m_treeLocalHeight > 1e-4f && m_treeLocalRadius > 1e-4f)
+			{
+				auto RotatePointY = [](const XMFLOAT3& p, float yaw) -> XMFLOAT3
+				{
+					const float c = std::cos(yaw);
+					const float s = std::sin(yaw);
+					return {
+						p.x * c - p.z * s,
+						p.y,
+						p.x * s + p.z * c
+					};
+				};
+
+				auto AppendBillboardQuad = [&](std::vector<Vertex>& bucket, float halfWidth, float minY, float maxY, float zOffset, float yaw)
+				{
+					const XMFLOAT3 p0 = RotatePointY({ -halfWidth, minY, zOffset }, yaw);
+					const XMFLOAT3 p1 = RotatePointY({ -halfWidth, maxY, zOffset }, yaw);
+					const XMFLOAT3 p2 = RotatePointY({  halfWidth, maxY, zOffset }, yaw);
+					const XMFLOAT3 p3 = RotatePointY({  halfWidth, minY, zOffset }, yaw);
+					AppendDoubleSidedQuad(bucket, p0, p1, p2, p3);
+				};
+
+				std::vector<Vertex> barkBucket;
+				std::vector<Vertex> leafBucket;
+				barkBucket.reserve(12);
+				leafBucket.reserve(72);
+
+				AppendBillboardQuad(barkBucket, 0.10f, 0.00f, 0.40f, 0.0f, 0.0f);
+				AppendBillboardQuad(leafBucket, 0.58f, 0.20f, 0.96f, 0.00f, 0.0f);
+				AppendBillboardQuad(leafBucket, 0.52f, 0.26f, 0.92f, 0.08f, XM_PIDIV4 * 0.65f);
+				AppendBillboardQuad(leafBucket, 0.52f, 0.26f, 0.92f, -0.08f, -XM_PIDIV4 * 0.65f);
+				AppendBillboardQuad(leafBucket, 0.40f, 0.34f, 1.02f, 0.02f, XM_PIDIV4 * 1.25f);
+
+				if (!barkBucket.empty())
+				{
+					ModelSubset subset = {};
+					subset.MaterialIndex = m_treeBarkMaterialIndex;
+					subset.StartVertex = static_cast<UINT>(treeBillboardVertices.size());
+					subset.VertexCount = static_cast<UINT>(barkBucket.size());
+					m_treeBillboardSubsets.push_back(subset);
+					treeBillboardVertices.insert(treeBillboardVertices.end(), barkBucket.begin(), barkBucket.end());
+				}
+
+				if (!leafBucket.empty())
+				{
+					ModelSubset subset = {};
+					subset.MaterialIndex = m_treeLeafMaterialIndex;
+					subset.StartVertex = static_cast<UINT>(treeBillboardVertices.size());
+					subset.VertexCount = static_cast<UINT>(leafBucket.size());
+					m_treeBillboardSubsets.push_back(subset);
+					treeBillboardVertices.insert(treeBillboardVertices.end(), leafBucket.begin(), leafBucket.end());
+				}
+			}
+		}
+	}
+
 	std::vector<Vertex> vertices;
 	for (UINT materialIndex = 0; materialIndex < static_cast<UINT>(materialVertices.size()); ++materialIndex)
 	{
@@ -4408,7 +4998,8 @@ void Framework::BuildSceneGeometryUpload()
 	}
 
 	m_modelVertexCount = static_cast<UINT>(vertices.size());
-	const UINT vbByteSize = static_cast<UINT>(vertices.size() * sizeof(Vertex));
+	m_treeVertexCount = static_cast<UINT>(treeVertices.size());
+	m_treeBillboardVertexCount = static_cast<UINT>(treeBillboardVertices.size());
 
 	D3D12_HEAP_PROPERTIES defaultHeap = {};
 	defaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
@@ -4542,16 +5133,29 @@ void Framework::BuildSceneGeometryUpload()
 		m_textureUploadResources.push_back(upload);
 	}
 
-	if (vbByteSize > 0)
+	auto UploadVertexBuffer = [&](const std::vector<Vertex>& srcVertices,
+		ComPtr<ID3D12Resource>& dstBuffer,
+		ComPtr<ID3D12Resource>& uploadBuffer,
+		D3D12_VERTEX_BUFFER_VIEW& outView)
 	{
-		const D3D12_RESOURCE_DESC vbDesc = MakeBufferDesc(vbByteSize);
+		dstBuffer.Reset();
+		uploadBuffer.Reset();
+		outView = {};
+
+		if (srcVertices.empty()) {
+			return;
+		}
+
+		const UINT byteSize = static_cast<UINT>(srcVertices.size() * sizeof(Vertex));
+		const D3D12_RESOURCE_DESC vbDesc = MakeBufferDesc(byteSize);
+
 		ThrowIfFailed(m_device->CreateCommittedResource(
 			&defaultHeap,
 			D3D12_HEAP_FLAG_NONE,
 			&vbDesc,
 			D3D12_RESOURCE_STATE_COMMON,
 			nullptr,
-			IID_PPV_ARGS(m_modelVB.GetAddressOf())));
+			IID_PPV_ARGS(dstBuffer.GetAddressOf())));
 
 		ThrowIfFailed(m_device->CreateCommittedResource(
 			&uploadHeap,
@@ -4559,31 +5163,39 @@ void Framework::BuildSceneGeometryUpload()
 			&vbDesc,
 			D3D12_RESOURCE_STATE_GENERIC_READ,
 			nullptr,
-			IID_PPV_ARGS(m_modelVBUpload.GetAddressOf())));
+			IID_PPV_ARGS(uploadBuffer.GetAddressOf())));
 
-		void* vbMapped = nullptr;
-		ThrowIfFailed(m_modelVBUpload->Map(0, nullptr, &vbMapped));
-		memcpy(vbMapped, vertices.data(), vbByteSize);
-		m_modelVBUpload->Unmap(0, nullptr);
+		void* mapped = nullptr;
+		ThrowIfFailed(uploadBuffer->Map(0, nullptr, &mapped));
+		memcpy(mapped, srcVertices.data(), byteSize);
+		uploadBuffer->Unmap(0, nullptr);
 
-		D3D12_RESOURCE_BARRIER vbToCopyDest = {};
-		vbToCopyDest.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-		vbToCopyDest.Transition.pResource = m_modelVB.Get();
-		vbToCopyDest.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
-		vbToCopyDest.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
-		vbToCopyDest.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-		m_commandList->ResourceBarrier(1, &vbToCopyDest);
+		D3D12_RESOURCE_BARRIER toCopyDest = {};
+		toCopyDest.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+		toCopyDest.Transition.pResource = dstBuffer.Get();
+		toCopyDest.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
+		toCopyDest.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+		toCopyDest.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+		m_commandList->ResourceBarrier(1, &toCopyDest);
 
-		m_commandList->CopyBufferRegion(m_modelVB.Get(), 0, m_modelVBUpload.Get(), 0, vbByteSize);
+		m_commandList->CopyBufferRegion(dstBuffer.Get(), 0, uploadBuffer.Get(), 0, byteSize);
 
-		D3D12_RESOURCE_BARRIER vbBarrier = {};
-		vbBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-		vbBarrier.Transition.pResource = m_modelVB.Get();
-		vbBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-		vbBarrier.Transition.StateAfter = D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER;
-		vbBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-		m_commandList->ResourceBarrier(1, &vbBarrier);
-	}
+		D3D12_RESOURCE_BARRIER toVertexBuffer = {};
+		toVertexBuffer.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+		toVertexBuffer.Transition.pResource = dstBuffer.Get();
+		toVertexBuffer.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+		toVertexBuffer.Transition.StateAfter = D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER;
+		toVertexBuffer.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+		m_commandList->ResourceBarrier(1, &toVertexBuffer);
+
+		outView.BufferLocation = dstBuffer->GetGPUVirtualAddress();
+		outView.StrideInBytes = sizeof(Vertex);
+		outView.SizeInBytes = byteSize;
+	};
+
+	UploadVertexBuffer(vertices, m_modelVB, m_modelVBUpload, m_modelVBV);
+	UploadVertexBuffer(treeVertices, m_treeVB, m_treeVBUpload, m_treeVBV);
+	UploadVertexBuffer(treeBillboardVertices, m_treeBillboardVB, m_treeBillboardVBUpload, m_treeBillboardVBV);
 
 	ThrowIfFailed(m_commandList->Close());
 	ID3D12CommandList* cmdLists[] = { m_commandList.Get() };
@@ -4592,17 +5204,8 @@ void Framework::BuildSceneGeometryUpload()
 
 	m_textureUploadResources.clear();
 	m_modelVBUpload.Reset();
-
-	if (m_modelVB)
-	{
-		m_modelVBV.BufferLocation = m_modelVB->GetGPUVirtualAddress();
-		m_modelVBV.StrideInBytes = sizeof(Vertex);
-		m_modelVBV.SizeInBytes = vbByteSize;
-	}
-	else
-	{
-		m_modelVBV = {};
-	}
+	m_treeVBUpload.Reset();
+	m_treeBillboardVBUpload.Reset();
 
 	BuildSceneObjects();
 	BuildObjectConstantBuffer();

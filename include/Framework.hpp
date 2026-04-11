@@ -7,6 +7,7 @@
 #include <vector>
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <Windows.h>
 #include <windowsx.h>
 #include "Window.hpp"
@@ -152,6 +153,7 @@ private:
 	void BuildObjectConstantBuffer();
 	void BuildOctree();
 	void UpdateVisibleObjects(const DirectX::XMMATRIX& viewProj);
+	void UpdateDynamicSceneObjects();
 
 	void BuildBoxGeometry();
 
@@ -199,6 +201,8 @@ public:
 	enum class SceneObjectGeometry {
 		SceneModel,
 		Box,
+		TreeModel,
+		TreeBillboard,
 	};
 
 	struct SceneObject {
@@ -207,6 +211,10 @@ public:
 		ObjectConstants Constants = {};
 		Aabb Bounds = {};
 		bool Occluder = true;
+		DirectX::XMFLOAT3 Anchor = { 0.0f, 0.0f, 0.0f };
+		DirectX::XMFLOAT2 BillboardScale = { 1.0f, 1.0f };
+		float LodMinDistance = 0.0f;
+		float LodMaxDistance = (std::numeric_limits<float>::max)();
 	};
 
 	struct OctreeNode {
@@ -265,6 +273,9 @@ private:
 		UINT ScatterOccluderCount = 18;
 		UINT ScatterBoxCount = 1536;
 		DirectX::XMFLOAT2 ScatterBoxScaleRange = { 0.018f, 0.045f };
+		UINT ScatterTreeCount = 24;
+		DirectX::XMFLOAT2 ScatterTreeScaleRange = { 0.040f, 0.060f };
+		float ScatterTreeBillboardDistance = 14.0f;
 	};
 
 	Microsoft::WRL::ComPtr<ID3D12Resource> m_modelVB;
@@ -272,6 +283,16 @@ private:
 	D3D12_VERTEX_BUFFER_VIEW m_modelVBV{};
 	UINT m_modelVertexCount = 0;
 	std::vector<ModelSubset> m_modelSubsets;
+	Microsoft::WRL::ComPtr<ID3D12Resource> m_treeVB;
+	Microsoft::WRL::ComPtr<ID3D12Resource> m_treeVBUpload;
+	D3D12_VERTEX_BUFFER_VIEW m_treeVBV{};
+	UINT m_treeVertexCount = 0;
+	std::vector<ModelSubset> m_treeModelSubsets;
+	Microsoft::WRL::ComPtr<ID3D12Resource> m_treeBillboardVB;
+	Microsoft::WRL::ComPtr<ID3D12Resource> m_treeBillboardVBUpload;
+	D3D12_VERTEX_BUFFER_VIEW m_treeBillboardVBV{};
+	UINT m_treeBillboardVertexCount = 0;
+	std::vector<ModelSubset> m_treeBillboardSubsets;
 	std::vector<ModelMaterial> m_modelMaterials;
 	std::vector<UINT> m_scatterMaterialIndices;
 	std::vector<SceneObject> m_sceneObjects;
@@ -293,6 +314,11 @@ private:
 
 	DirectX::XMFLOAT3 m_modelCenter = { 0.0f, 0.0f, 0.0f };
 	float m_modelScale = 1.0f;
+	Aabb m_treeLocalBounds = {};
+	float m_treeLocalRadius = 0.0f;
+	float m_treeLocalHeight = 0.0f;
+	UINT m_treeBarkMaterialIndex = 0;
+	UINT m_treeLeafMaterialIndex = 0;
 	DirectX::XMFLOAT2 m_uvAnimation = { 0.0f, 0.0f };
 	DirectX::XMFLOAT2 m_uvAnimationSpeed = { 0.08f, 0.0f };
 	DirectX::XMFLOAT2 m_uvGlobalTiling = { 1.0f, 1.0f };
