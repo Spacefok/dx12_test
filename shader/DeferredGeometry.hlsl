@@ -249,7 +249,7 @@ float EvaluateWaterWave(float2 baseTexC, out float2 displacementGradient)
         sincos(phase0, s0, c0);
         sincos(phase1, s1, c1);
         sincos(phase2, s2, c2);
-
+        
         waveHeight += amplitude * s0;
         waveHeight += amplitude * secondaryRatio * s1;
         waveHeight += amplitude * 0.35f * s2;
@@ -481,4 +481,53 @@ GBufferOut PSGBuffer(GeometryPSInput pin)
     gout.Normal = float4(normalW, saturate(pin.DebugDisplacement));
     gout.PositionSpec = float4(pin.PosW, max(gSpecPower, 1.0f));
     return gout;
+}
+
+float4 PSTransparent(GeometryPSInput pin) : SV_Target
+{
+    float4 baseColorSample = float4(1.0f, 1.0f, 1.0f, 1.0f);
+    if ((gMatFlags & MATERIAL_FLAG_HAS_BASE_COLOR_TEXTURE) != 0u)
+    {
+        baseColorSample = gBaseColorMap.Sample(gSamLinearWrap, pin.TexC);
+    }
+
+    float alpha = pin.Color.a * gMatDiffuseAlbedo.a * baseColorSample.a;
+    if ((gMatFlags & MATERIAL_FLAG_HAS_OPACITY_TEXTURE) != 0u)
+    {
+        alpha *= gOpacityMap.Sample(gSamLinearWrap, pin.TexC).r;
+    }
+
+    alpha = saturate(alpha);
+    if (alpha <= 1e-3f)
+    {
+        discard;
+    }
+
+    float3 albedo = pin.Color.rgb * gMatDiffuseAlbedo.rgb * baseColorSample.rgb;
+
+    float3 normalW = SafeNormalize(pin.NormalW, float3(0.0f, 1.0f, 0.0f));
+    if ((gMatFlags & MATERIAL_FLAG_HAS_NORMAL_TEXTURE) != 0u)
+    {
+        float3 tangentW = pin.TangentW - normalW * dot(pin.TangentW, normalW);
+        tangentW = SafeNormalize(tangentW, BuildFallbackTangent(normalW));
+
+        float3 bitangentW = SafeNormalize(cross(normalW, tangentW), float3(0.0f, 0.0f, 1.0f));
+        float3 normalTS = gNormalMap.Sample(gSamLinearWrap, pin.TexC).xyz * 2.0f - 1.0f;
+        normalW = SafeNormalize(
+            normalTS.x * tangentW +
+            normalTS.y * bitangentW +
+            normalTS.z * normalW,
+            normalW);
+    }
+
+    float3 viewDir = SafeNormalize(gEyePosW - pin.PosW, float3(0.0f, 0.0f, 1.0f));
+    float3 lightDir = SafeNormalize(-gLightDirW, float3(0.0f, -1.0f, 0.0f));
+    float ndotl = saturate(dot(normalW, lightDir));
+    float3 color = gAmbient.rgb * albedo + gDiffuse.rgb * albedo * ndotl;
+
+    float3 halfVector = SafeNormalize(viewDir + lightDir, lightDir);
+    float spec = pow(saturate(dot(normalW, halfVector)), max(gSpecPower, 1.0f));
+    color += gSpecular.rgb * spec;
+
+    return float4(color, alpha);
 }

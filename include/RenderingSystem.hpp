@@ -12,6 +12,7 @@ public:
 	ID3D12RootSignature* GeometryRootSignature() const { return m_geometryRootSignature.Get(); }
 	ID3D12PipelineState* GeometryBasicPSO() const { return m_geometryBasicPso.Get(); }
 	ID3D12PipelineState* GeometryTessellationPSO() const { return m_geometryTessellationPso.Get(); }
+	ID3D12PipelineState* ForwardTransparentPSO() const { return m_forwardTransparentPso.Get(); }
 
 	ID3D12RootSignature* LightingRootSignature() const { return m_lightingRootSignature.Get(); }
 	ID3D12PipelineState* LightingPSO() const { return m_lightingPso.Get(); }
@@ -22,6 +23,7 @@ private:
 	ComPtr<ID3DBlob> m_geometryHsByteCode;
 	ComPtr<ID3DBlob> m_geometryDsByteCode;
 	ComPtr<ID3DBlob> m_geometryPsByteCode;
+	ComPtr<ID3DBlob> m_forwardTransparentPsByteCode;
 	ComPtr<ID3DBlob> m_lightingVsByteCode;
 	ComPtr<ID3DBlob> m_lightingPsByteCode;
 
@@ -30,6 +32,7 @@ private:
 
 	ComPtr<ID3D12PipelineState> m_geometryBasicPso;
 	ComPtr<ID3D12PipelineState> m_geometryTessellationPso;
+	ComPtr<ID3D12PipelineState> m_forwardTransparentPso;
 	ComPtr<ID3D12PipelineState> m_lightingPso;
 };
 

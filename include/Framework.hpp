@@ -148,6 +148,10 @@ private:
 	void LoadScene(size_t sceneIndex, bool resetCamera);
 	void ResetCameraForCurrentScene();
 	void UpdateWindowTitle() const;
+	void BuildSceneObjects();
+	void BuildObjectConstantBuffer();
+	void BuildOctree();
+	void UpdateVisibleObjects(const DirectX::XMMATRIX& viewProj);
 
 	void BuildBoxGeometry();
 
@@ -175,6 +179,8 @@ private:
 		float DisplacementScale = 0.0f;
 		float DisplacementBias = 0.0f;
 		float AlphaCutoff = 0.33f;
+		bool Transparent = false;
+		bool Occluder = true;
 		UINT SrvBaseIndex = 0;
 	};
 
@@ -184,9 +190,37 @@ private:
 		UINT MaterialIndex = 0;
 	};
 
+public:
+	struct Aabb {
+		DirectX::XMFLOAT3 Min = { 0.0f, 0.0f, 0.0f };
+		DirectX::XMFLOAT3 Max = { 0.0f, 0.0f, 0.0f };
+	};
+
+	enum class SceneObjectGeometry {
+		SceneModel,
+		Box,
+	};
+
+	struct SceneObject {
+		SceneObjectGeometry Geometry = SceneObjectGeometry::SceneModel;
+		UINT MaterialIndex = 0;
+		ObjectConstants Constants = {};
+		Aabb Bounds = {};
+		bool Occluder = true;
+	};
+
+	struct OctreeNode {
+		Aabb Bounds = {};
+		std::array<int, 8> Children = { -1, -1, -1, -1, -1, -1, -1, -1 };
+		std::vector<UINT> ObjectIndices;
+	};
+
+private:
+
 	enum class SceneAssetFormat {
 		Obj,
 		Fbx,
+		Procedural,
 	};
 
 	enum class SceneLightingPreset {
@@ -226,6 +260,11 @@ private:
 		float WaterPlaneUvScale = 1.0f;
 		DirectX::XMFLOAT4 WaterPlaneColor = { 0.20f, 0.57f, 0.86f, 1.0f };
 		DirectX::XMFLOAT4 WaterWaveParams = { 0.028f, 5.5f, 1.15f, 0.42f };
+		bool EnableScatterField = false;
+		DirectX::XMFLOAT3 ScatterFieldHalfExtents = { 10.0f, 4.0f, 10.0f };
+		UINT ScatterOccluderCount = 18;
+		UINT ScatterBoxCount = 1536;
+		DirectX::XMFLOAT2 ScatterBoxScaleRange = { 0.018f, 0.045f };
 	};
 
 	Microsoft::WRL::ComPtr<ID3D12Resource> m_modelVB;
@@ -234,6 +273,20 @@ private:
 	UINT m_modelVertexCount = 0;
 	std::vector<ModelSubset> m_modelSubsets;
 	std::vector<ModelMaterial> m_modelMaterials;
+	std::vector<UINT> m_scatterMaterialIndices;
+	std::vector<SceneObject> m_sceneObjects;
+	std::vector<UINT> m_visibleObjectIndices;
+	std::vector<UINT> m_visibleOpaqueObjectIndices;
+	std::vector<UINT> m_visibleTransparentObjectIndices;
+	std::vector<OctreeNode> m_octreeNodes;
+	Aabb m_normalizedSceneBounds = {};
+	bool m_enableFrustumCulling = true;
+	bool m_useOctreeForCulling = false;
+	bool m_enableOcclusionCulling = true;
+	UINT m_visibleObjectCount = 0;
+	UINT m_boxObjectCount = 0;
+	UINT m_occlusionCulledObjectCount = 0;
+	UINT m_objectPassCbvPairCount = 1;
 
 	std::vector<ComPtr<ID3D12Resource>> m_textureResources;
 	std::vector<ComPtr<ID3D12Resource>> m_textureUploadResources;
@@ -298,6 +351,10 @@ private:
 		D3D12_GPU_DESCRIPTOR_HANDLE h = m_cbvHeap->GetGPUDescriptorHandleForHeapStart();
 		h.ptr += static_cast<SIZE_T>(index) * m_cbvSrvUavDescriptorSize;
 		return h;
+	}
+
+	D3D12_GPU_DESCRIPTOR_HANDLE ObjectPassGpuHandle(UINT objectIndex) const {
+		return CbvSrvGpuHandle(objectIndex * 2);
 	}
 };
 

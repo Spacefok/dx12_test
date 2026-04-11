@@ -19,6 +19,7 @@
 #include <cfloat>
 #include <fstream>
 #include <cwctype>
+#include <random>
 #include <string_view>
 
 #if defined(_DEBUG)
@@ -711,6 +712,338 @@ void ComputeTriangleNormalAndTangent(Vertex& v0, Vertex& v1, Vertex& v2)
 	v2.Tangent = tangent;
 }
 
+enum class AabbFrustumRelation {
+	Outside,
+	Intersects,
+	Inside,
+};
+
+Framework::Aabb MakeInvalidAabb()
+{
+	return {
+		{ +FLT_MAX, +FLT_MAX, +FLT_MAX },
+		{ -FLT_MAX, -FLT_MAX, -FLT_MAX }
+	};
+}
+
+bool IsAabbValid(const Framework::Aabb& bounds)
+{
+	return bounds.Min.x <= bounds.Max.x
+		&& bounds.Min.y <= bounds.Max.y
+		&& bounds.Min.z <= bounds.Max.z;
+}
+
+void ExpandAabb(Framework::Aabb& bounds, const DirectX::XMFLOAT3& point)
+{
+	bounds.Min.x = (std::min)(bounds.Min.x, point.x);
+	bounds.Min.y = (std::min)(bounds.Min.y, point.y);
+	bounds.Min.z = (std::min)(bounds.Min.z, point.z);
+	bounds.Max.x = (std::max)(bounds.Max.x, point.x);
+	bounds.Max.y = (std::max)(bounds.Max.y, point.y);
+	bounds.Max.z = (std::max)(bounds.Max.z, point.z);
+}
+
+void ExpandAabb(Framework::Aabb& bounds, const Framework::Aabb& other)
+{
+	if (!IsAabbValid(other)) {
+		return;
+	}
+
+	ExpandAabb(bounds, other.Min);
+	ExpandAabb(bounds, other.Max);
+}
+
+DirectX::XMFLOAT3 AabbCenter(const Framework::Aabb& bounds)
+{
+	return {
+		0.5f * (bounds.Min.x + bounds.Max.x),
+		0.5f * (bounds.Min.y + bounds.Max.y),
+		0.5f * (bounds.Min.z + bounds.Max.z)
+	};
+}
+
+DirectX::XMFLOAT3 AabbExtents(const Framework::Aabb& bounds)
+{
+	return {
+		0.5f * (bounds.Max.x - bounds.Min.x),
+		0.5f * (bounds.Max.y - bounds.Min.y),
+		0.5f * (bounds.Max.z - bounds.Min.z)
+	};
+}
+
+Framework::Aabb MakeAabbFromCenterExtents(const DirectX::XMFLOAT3& center, const DirectX::XMFLOAT3& extents)
+{
+	return {
+		{ center.x - extents.x, center.y - extents.y, center.z - extents.z },
+		{ center.x + extents.x, center.y + extents.y, center.z + extents.z }
+	};
+}
+
+Framework::Aabb BuildChildAabb(const Framework::Aabb& parentBounds, int childIndex)
+{
+	const DirectX::XMFLOAT3 center = AabbCenter(parentBounds);
+	const DirectX::XMFLOAT3 extents = AabbExtents(parentBounds);
+	const DirectX::XMFLOAT3 childExtents = {
+		extents.x * 0.5f,
+		extents.y * 0.5f,
+		extents.z * 0.5f
+	};
+
+	const float offsetX = (childIndex & 1) ? childExtents.x : -childExtents.x;
+	const float offsetY = (childIndex & 2) ? childExtents.y : -childExtents.y;
+	const float offsetZ = (childIndex & 4) ? childExtents.z : -childExtents.z;
+
+	return MakeAabbFromCenterExtents(
+		{ center.x + offsetX, center.y + offsetY, center.z + offsetZ },
+		childExtents);
+}
+
+bool AabbFitsInside(const Framework::Aabb& objectBounds, const Framework::Aabb& containerBounds)
+{
+	return objectBounds.Min.x >= containerBounds.Min.x
+		&& objectBounds.Min.y >= containerBounds.Min.y
+		&& objectBounds.Min.z >= containerBounds.Min.z
+		&& objectBounds.Max.x <= containerBounds.Max.x
+		&& objectBounds.Max.y <= containerBounds.Max.y
+		&& objectBounds.Max.z <= containerBounds.Max.z;
+}
+
+bool AabbContainsPoint(const Framework::Aabb& bounds, const DirectX::XMFLOAT3& point)
+{
+	return point.x >= bounds.Min.x && point.x <= bounds.Max.x
+		&& point.y >= bounds.Min.y && point.y <= bounds.Max.y
+		&& point.z >= bounds.Min.z && point.z <= bounds.Max.z;
+}
+
+std::array<DirectX::XMFLOAT4, 6> ExtractFrustumPlanes(DirectX::FXMMATRIX viewProj)
+{
+	using namespace DirectX;
+
+	XMFLOAT4X4 m;
+	XMStoreFloat4x4(&m, viewProj);
+
+	std::array<XMFLOAT4, 6> planes = {
+		XMFLOAT4{ m._14 + m._11, m._24 + m._21, m._34 + m._31, m._44 + m._41 }, // left
+		XMFLOAT4{ m._14 - m._11, m._24 - m._21, m._34 - m._31, m._44 - m._41 }, // right
+		XMFLOAT4{ m._14 + m._12, m._24 + m._22, m._34 + m._32, m._44 + m._42 }, // bottom
+		XMFLOAT4{ m._14 - m._12, m._24 - m._22, m._34 - m._32, m._44 - m._42 }, // top
+		XMFLOAT4{ m._13,          m._23,          m._33,          m._43 },         // near
+		XMFLOAT4{ m._14 - m._13, m._24 - m._23, m._34 - m._33, m._44 - m._43 }, // far
+	};
+
+	for (DirectX::XMFLOAT4& plane : planes)
+	{
+		const float lengthSq = plane.x * plane.x + plane.y * plane.y + plane.z * plane.z;
+		if (lengthSq <= 1e-8f) {
+			continue;
+		}
+
+		const float invLength = 1.0f / std::sqrt(lengthSq);
+		plane.x *= invLength;
+		plane.y *= invLength;
+		plane.z *= invLength;
+		plane.w *= invLength;
+	}
+
+	return planes;
+}
+
+AabbFrustumRelation ClassifyAabbAgainstFrustum(
+	const Framework::Aabb& bounds,
+	const std::array<DirectX::XMFLOAT4, 6>& planes)
+{
+	const DirectX::XMFLOAT3 center = AabbCenter(bounds);
+	const DirectX::XMFLOAT3 extents = AabbExtents(bounds);
+
+	bool intersects = false;
+
+	for (const DirectX::XMFLOAT4& plane : planes)
+	{
+		const float distanceToCenter =
+			plane.x * center.x +
+			plane.y * center.y +
+			plane.z * center.z +
+			plane.w;
+
+		const float projectedRadius =
+			std::fabs(plane.x) * extents.x +
+			std::fabs(plane.y) * extents.y +
+			std::fabs(plane.z) * extents.z;
+
+		if (distanceToCenter + projectedRadius < 0.0f) {
+			return AabbFrustumRelation::Outside;
+		}
+
+		if (distanceToCenter - projectedRadius < 0.0f) {
+			intersects = true;
+		}
+	}
+
+	return intersects ? AabbFrustumRelation::Intersects : AabbFrustumRelation::Inside;
+}
+
+float RandomRange(std::mt19937& rng, float minValue, float maxValue)
+{
+	if (maxValue <= minValue) {
+		return minValue;
+	}
+
+	std::uniform_real_distribution<float> distribution(minValue, maxValue);
+	return distribution(rng);
+}
+
+std::wstring CullingModeLabel(bool enableFrustumCulling, bool useOctreeForCulling)
+{
+	if (!enableFrustumCulling) {
+		return L"Off";
+	}
+
+	return useOctreeForCulling ? L"Octree" : L"Linear";
+}
+
+struct OcclusionScreenRect {
+	int MinX = 0;
+	int MinY = 0;
+	int MaxX = 0;
+	int MaxY = 0;
+	float NearDepth = 0.0f;
+	float FarDepth = 1.0f;
+};
+
+bool ProjectAabbToScreenRect(
+	const Framework::Aabb& bounds,
+	DirectX::FXMMATRIX viewProj,
+	const DirectX::XMFLOAT3& eyePos,
+	int rasterWidth,
+	int rasterHeight,
+	OcclusionScreenRect& outRect)
+{
+	using namespace DirectX;
+
+	if (AabbContainsPoint(bounds, eyePos))
+	{
+		outRect.MinX = 0;
+		outRect.MinY = 0;
+		outRect.MaxX = rasterWidth - 1;
+		outRect.MaxY = rasterHeight - 1;
+		outRect.NearDepth = 0.0f;
+		outRect.FarDepth = 0.02f;
+		return true;
+	}
+
+	const XMFLOAT3 corners[8] = {
+		{ bounds.Min.x, bounds.Min.y, bounds.Min.z },
+		{ bounds.Max.x, bounds.Min.y, bounds.Min.z },
+		{ bounds.Min.x, bounds.Max.y, bounds.Min.z },
+		{ bounds.Max.x, bounds.Max.y, bounds.Min.z },
+		{ bounds.Min.x, bounds.Min.y, bounds.Max.z },
+		{ bounds.Max.x, bounds.Min.y, bounds.Max.z },
+		{ bounds.Min.x, bounds.Max.y, bounds.Max.z },
+		{ bounds.Max.x, bounds.Max.y, bounds.Max.z },
+	};
+
+	float minScreenX = static_cast<float>(rasterWidth);
+	float minScreenY = static_cast<float>(rasterHeight);
+	float maxScreenX = 0.0f;
+	float maxScreenY = 0.0f;
+	float minDepth = 1.0f;
+	float maxDepth = 0.0f;
+	bool hasProjectedCorner = false;
+
+	for (const XMFLOAT3& corner : corners)
+	{
+		const XMVECTOR clip = XMVector4Transform(XMVectorSet(corner.x, corner.y, corner.z, 1.0f), viewProj);
+		const float w = XMVectorGetW(clip);
+		const float safeW = (std::max)(w, 1e-4f);
+		const float invW = 1.0f / safeW;
+		const float ndcX = XMVectorGetX(clip) * invW;
+		const float ndcY = XMVectorGetY(clip) * invW;
+		const float ndcZ = XMVectorGetZ(clip) * invW;
+
+		const float screenX = (ndcX * 0.5f + 0.5f) * static_cast<float>(rasterWidth);
+		const float screenY = (1.0f - (ndcY * 0.5f + 0.5f)) * static_cast<float>(rasterHeight);
+
+		minScreenX = (std::min)(minScreenX, screenX);
+		minScreenY = (std::min)(minScreenY, screenY);
+		maxScreenX = (std::max)(maxScreenX, screenX);
+		maxScreenY = (std::max)(maxScreenY, screenY);
+		minDepth = (std::min)(minDepth, std::clamp(ndcZ, 0.0f, 1.0f));
+		maxDepth = (std::max)(maxDepth, std::clamp(ndcZ, 0.0f, 1.0f));
+		hasProjectedCorner = true;
+	}
+
+	if (!hasProjectedCorner) {
+		return false;
+	}
+
+	const int minX = std::clamp(static_cast<int>(std::floor(minScreenX)), 0, rasterWidth - 1);
+	const int minY = std::clamp(static_cast<int>(std::floor(minScreenY)), 0, rasterHeight - 1);
+	const int maxX = std::clamp(static_cast<int>(std::ceil(maxScreenX)), 0, rasterWidth - 1);
+	const int maxY = std::clamp(static_cast<int>(std::ceil(maxScreenY)), 0, rasterHeight - 1);
+
+	if (minX > maxX || minY > maxY) {
+		return false;
+	}
+
+	outRect.MinX = minX;
+	outRect.MinY = minY;
+	outRect.MaxX = maxX;
+	outRect.MaxY = maxY;
+	outRect.NearDepth = minDepth;
+	outRect.FarDepth = maxDepth;
+	return true;
+}
+
+bool IsOccludedByDepthPyramid(
+	const std::vector<float>& depthBuffer,
+	int rasterWidth,
+	const OcclusionScreenRect& rect)
+{
+	const float bias = 0.0015f;
+	for (int y = rect.MinY; y <= rect.MaxY; ++y)
+	{
+		const int rowOffset = y * rasterWidth;
+		for (int x = rect.MinX; x <= rect.MaxX; ++x)
+		{
+			if (depthBuffer[rowOffset + x] > rect.NearDepth - bias) {
+				return false;
+			}
+		}
+	}
+
+	return true;
+}
+
+void RasterizeOccluderToDepthPyramid(
+	std::vector<float>& depthBuffer,
+	int rasterWidth,
+	const OcclusionScreenRect& rect)
+{
+	int minX = rect.MinX;
+	int minY = rect.MinY;
+	int maxX = rect.MaxX;
+	int maxY = rect.MaxY;
+
+	const int padX = (maxX - minX + 1) / 6;
+	const int padY = (maxY - minY + 1) / 6;
+	if (minX + padX <= maxX - padX) {
+		minX += padX;
+		maxX -= padX;
+	}
+	if (minY + padY <= maxY - padY) {
+		minY += padY;
+		maxY -= padY;
+	}
+
+	for (int y = minY; y <= maxY; ++y)
+	{
+		const int rowOffset = y * rasterWidth;
+		for (int x = minX; x <= maxX; ++x) {
+			depthBuffer[rowOffset + x] = (std::min)(depthBuffer[rowOffset + x], rect.FarDepth);
+		}
+	}
+}
+
 std::filesystem::path ResolveSceneTexturePath(const std::filesystem::path& modelPath, const std::filesystem::path& rawPath)
 {
 	if (rawPath.empty()) {
@@ -983,6 +1316,28 @@ LRESULT Framework::MsgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 		{
 			if (vk == VK_F1) {
 				m_showBufferDebug = !m_showBufferDebug;
+				UpdateWindowTitle();
+			}
+			else if (vk == VK_F2)
+			{
+				m_enableFrustumCulling = !m_enableFrustumCulling;
+				if (!m_enableFrustumCulling) {
+					m_useOctreeForCulling = false;
+				}
+				UpdateWindowTitle();
+			}
+			else if (vk == VK_F3)
+			{
+				m_useOctreeForCulling = !m_useOctreeForCulling;
+				if (m_useOctreeForCulling) {
+					m_enableFrustumCulling = true;
+				}
+				UpdateWindowTitle();
+			}
+			else if (vk == VK_F4)
+			{
+				m_enableOcclusionCulling = !m_enableOcclusionCulling;
+				UpdateWindowTitle();
 			}
 			else if (vk >= '1' && vk <= '9')
 			{
@@ -1147,17 +1502,6 @@ void Framework::Update(const double& dt)
 	m_uvAnimation.x -= std::floor(m_uvAnimation.x);
 	m_uvAnimation.y -= std::floor(m_uvAnimation.y);
 
-	ObjectConstants obj = {};
-	XMMATRIX world =
-		XMMatrixTranslation(-m_modelCenter.x, -m_modelCenter.y, -m_modelCenter.z) *
-		XMMatrixScaling(m_modelScale, m_modelScale, m_modelScale);
-	XMMATRIX worldInvTranspose = XMMatrixTranspose(XMMatrixInverse(nullptr, world));
-
-	XMStoreFloat4x4(&obj.World, XMMatrixTranspose(world));
-	XMStoreFloat4x4(&obj.WorldInvTranspose, worldInvTranspose);
-
-	m_objectCB->CopyData(0, obj);
-
 	XMVECTOR pos = XMLoadFloat3(&m_camPos);
 	XMVECTOR target = XMLoadFloat3(&m_camTarget);
 	XMVECTOR up = XMVector3Normalize(XMLoadFloat3(&m_camUp));
@@ -1194,6 +1538,7 @@ void Framework::Update(const double& dt)
 	XMMATRIX proj = XMMatrixPerspectiveFovLH(0.25f * XM_PI, aspect, 0.1f, 1000.0f);
 
 	XMMATRIX viewProj = view * proj;
+	UpdateVisibleObjects(viewProj);
 
 	PassConstants pass{};
 	XMStoreFloat4x4(&pass.ViewProj, XMMatrixTranspose(viewProj));
@@ -1270,6 +1615,7 @@ void Framework::Update(const double& dt)
 	}
 
 	m_deferredPassCB->CopyData(0, deferred);
+	UpdateWindowTitle();
 }
 
 void Framework::Draw()
@@ -1286,7 +1632,6 @@ void Framework::Draw()
 	m_gbuffer.TransitionToRenderTargets(m_commandList.Get());
 
 	m_commandList->SetGraphicsRootSignature(m_renderingSystem.GeometryRootSignature());
-	m_commandList->SetGraphicsRootDescriptorTable(0, CbvSrvGpuHandle(0));
 
 	auto BindMaterial = [&](const Framework::ModelMaterial& srcMaterial)
 	{
@@ -1326,47 +1671,76 @@ void Framework::Draw()
 		nullptr
 	);
 
-	if (m_modelVB && !m_modelSubsets.empty())
+	if (!m_sceneObjects.empty())
 	{
-		m_commandList->IASetVertexBuffers(0, 1, &m_modelVBV);
-		bool tessellationPipelineActive = false;
-		bool pipelineInitialized = false;
+		bool boxPipelineBound = false;
+		bool boxGeometryBound = false;
 
-		for (const ModelSubset& subset : m_modelSubsets)
+		for (UINT objectIndex : m_visibleOpaqueObjectIndices)
 		{
-			const UINT materialIndex = (subset.MaterialIndex < m_modelMaterials.size()) ? subset.MaterialIndex : 0;
-			const ModelMaterial& material = m_modelMaterials[materialIndex];
-			const bool usesTessellation = (material.Flags & MaterialFlagUseTessellation) != 0u;
+			if (objectIndex >= m_sceneObjects.size()) {
+				continue;
+			}
 
-			if (!pipelineInitialized || tessellationPipelineActive != usesTessellation)
+			const SceneObject& sceneObject = m_sceneObjects[objectIndex];
+			m_commandList->SetGraphicsRootDescriptorTable(0, ObjectPassGpuHandle(objectIndex));
+
+			if (sceneObject.Geometry == SceneObjectGeometry::SceneModel && m_modelVB && !m_modelSubsets.empty())
 			{
-				tessellationPipelineActive = usesTessellation;
-				pipelineInitialized = true;
+				m_commandList->IASetVertexBuffers(0, 1, &m_modelVBV);
+				bool tessellationPipelineActive = false;
+				bool pipelineInitialized = false;
 
-				if (tessellationPipelineActive)
+				for (const ModelSubset& subset : m_modelSubsets)
 				{
-					m_commandList->SetPipelineState(m_renderingSystem.GeometryTessellationPSO());
-					m_commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST);
+					const UINT materialIndex = (subset.MaterialIndex < m_modelMaterials.size()) ? subset.MaterialIndex : 0;
+					const ModelMaterial& material = m_modelMaterials[materialIndex];
+					const bool usesTessellation = (material.Flags & MaterialFlagUseTessellation) != 0u;
+
+					if (!pipelineInitialized || tessellationPipelineActive != usesTessellation)
+					{
+						tessellationPipelineActive = usesTessellation;
+						pipelineInitialized = true;
+
+						if (tessellationPipelineActive)
+						{
+							m_commandList->SetPipelineState(m_renderingSystem.GeometryTessellationPSO());
+							m_commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST);
+						}
+						else
+						{
+							m_commandList->SetPipelineState(m_renderingSystem.GeometryBasicPSO());
+							m_commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+						}
+					}
+
+					BindMaterial(material);
+					m_commandList->DrawInstanced(subset.VertexCount, 1, subset.StartVertex, 0);
 				}
-				else
+			}
+			else if (sceneObject.Geometry == SceneObjectGeometry::Box && m_boxVB && m_boxIB)
+			{
+				const UINT materialIndex = (sceneObject.MaterialIndex < m_modelMaterials.size()) ? sceneObject.MaterialIndex : 0;
+				const ModelMaterial& material = m_modelMaterials.empty() ? ModelMaterial{} : m_modelMaterials[materialIndex];
+
+				if (!boxPipelineBound)
 				{
 					m_commandList->SetPipelineState(m_renderingSystem.GeometryBasicPSO());
 					m_commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+					boxPipelineBound = true;
 				}
-			}
 
-			BindMaterial(material);
-			m_commandList->DrawInstanced(subset.VertexCount, 1, subset.StartVertex, 0);
+				if (!boxGeometryBound)
+				{
+					m_commandList->IASetVertexBuffers(0, 1, &m_boxVBView);
+					m_commandList->IASetIndexBuffer(&m_boxIBView);
+					boxGeometryBound = true;
+				}
+
+				BindMaterial(material);
+				m_commandList->DrawIndexedInstanced(m_boxIndexCount, 1, 0, 0, 0);
+			}
 		}
-	}
-	else
-	{
-		m_commandList->SetPipelineState(m_renderingSystem.GeometryBasicPSO());
-		BindMaterial(ModelMaterial{});
-		m_commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-		m_commandList->IASetVertexBuffers(0, 1, &m_boxVBView);
-		m_commandList->IASetIndexBuffer(&m_boxIBView);
-		m_commandList->DrawIndexedInstanced(m_boxIndexCount, 1, 0, 0, 0);
 	}
 
 	m_gbuffer.TransitionToShaderResources(m_commandList.Get());
@@ -1405,6 +1779,35 @@ void Framework::Draw()
 	depthToWrite.Transition.StateAfter = D3D12_RESOURCE_STATE_DEPTH_WRITE;
 	depthToWrite.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
 	m_commandList->ResourceBarrier(1, &depthToWrite);
+
+	if (!m_visibleTransparentObjectIndices.empty() && m_boxVB && m_boxIB)
+	{
+		const D3D12_CPU_DESCRIPTOR_HANDLE depthView = DepthStencilView();
+		m_commandList->OMSetRenderTargets(1, &backBufferRtv, TRUE, &depthView);
+		m_commandList->SetGraphicsRootSignature(m_renderingSystem.GeometryRootSignature());
+		m_commandList->SetPipelineState(m_renderingSystem.ForwardTransparentPSO());
+		m_commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+		m_commandList->IASetVertexBuffers(0, 1, &m_boxVBView);
+		m_commandList->IASetIndexBuffer(&m_boxIBView);
+
+		for (UINT objectIndex : m_visibleTransparentObjectIndices)
+		{
+			if (objectIndex >= m_sceneObjects.size()) {
+				continue;
+			}
+
+			const SceneObject& sceneObject = m_sceneObjects[objectIndex];
+			if (sceneObject.Geometry != SceneObjectGeometry::Box) {
+				continue;
+			}
+
+			const UINT materialIndex = (sceneObject.MaterialIndex < m_modelMaterials.size()) ? sceneObject.MaterialIndex : 0;
+			const ModelMaterial& material = m_modelMaterials.empty() ? ModelMaterial{} : m_modelMaterials[materialIndex];
+			m_commandList->SetGraphicsRootDescriptorTable(0, ObjectPassGpuHandle(objectIndex));
+			BindMaterial(material);
+			m_commandList->DrawIndexedInstanced(m_boxIndexCount, 1, 0, 0, 0);
+		}
+	}
 
 	D3D12_RESOURCE_BARRIER toPresent{};
 	toPresent.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -1657,7 +2060,8 @@ void Framework::BuildShaders()
 
 void Framework::BuildConstantBuffers()
 {
-	m_objectCB = std::make_unique<UploadBuffer<ObjectConstants>>(m_device.Get(), 1, true);
+	const UINT objectCount = std::max<UINT>(1u, static_cast<UINT>(m_sceneObjects.size()));
+	m_objectCB = std::make_unique<UploadBuffer<ObjectConstants>>(m_device.Get(), objectCount, true);
 	m_passCB = std::make_unique<UploadBuffer<PassConstants>>(m_device.Get(), 1, true);
 	m_deferredPassCB = std::make_unique<UploadBuffer<DeferredPassConstants>>(m_device.Get(), 1, true);
 	m_directionalLightSB = std::make_unique<UploadBuffer<GpuDirectionalLight>>(m_device.Get(), MaxDirectionalLights, false);
@@ -1667,7 +2071,8 @@ void Framework::BuildConstantBuffers()
 
 void Framework::BuildCbvHeap()
 {
-	m_textureSrvBaseIndex = 2;
+	m_objectPassCbvPairCount = std::max<UINT>(1u, static_cast<UINT>(m_sceneObjects.size()));
+	m_textureSrvBaseIndex = m_objectPassCbvPairCount * 2;
 	const UINT materialBlockCount = std::max<UINT>(1u, static_cast<UINT>(m_modelMaterials.size()));
 	m_textureSrvCount = materialBlockCount * MaterialTextureSlotCount;
 	m_deferredPassCbvIndex = m_textureSrvBaseIndex + m_textureSrvCount;
@@ -1687,20 +2092,22 @@ void Framework::BuildCbvHeap()
 
 void Framework::BuildCbvViews()
 {
+	const UINT objectCbByteSize = CalcConstantBufferByteSize(sizeof(ObjectConstants));
+	const UINT passCbByteSize = CalcConstantBufferByteSize(sizeof(PassConstants));
+	const D3D12_GPU_VIRTUAL_ADDRESS objectCbBaseAddress = m_objectCB->Resource()->GetGPUVirtualAddress();
+	const D3D12_GPU_VIRTUAL_ADDRESS passCbAddress = m_passCB->Resource()->GetGPUVirtualAddress();
+
+	for (UINT objectIndex = 0; objectIndex < m_objectPassCbvPairCount; ++objectIndex)
 	{
-		D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc = {};
-		cbvDesc.BufferLocation = m_objectCB->Resource()->GetGPUVirtualAddress();
-		cbvDesc.SizeInBytes = CalcConstantBufferByteSize(sizeof(ObjectConstants));
+		D3D12_CONSTANT_BUFFER_VIEW_DESC objectCbvDesc = {};
+		objectCbvDesc.BufferLocation = objectCbBaseAddress + static_cast<UINT64>(objectIndex) * objectCbByteSize;
+		objectCbvDesc.SizeInBytes = objectCbByteSize;
+		m_device->CreateConstantBufferView(&objectCbvDesc, CbvSrvCpuHandle(objectIndex * 2));
 
-		m_device->CreateConstantBufferView(&cbvDesc, CbvSrvCpuHandle(0));
-	}
-
-	{
-		D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc = {};
-		cbvDesc.BufferLocation = m_passCB->Resource()->GetGPUVirtualAddress();
-		cbvDesc.SizeInBytes = CalcConstantBufferByteSize(sizeof(PassConstants));
-
-		m_device->CreateConstantBufferView(&cbvDesc, CbvSrvCpuHandle(1));
+		D3D12_CONSTANT_BUFFER_VIEW_DESC passCbvDesc = {};
+		passCbvDesc.BufferLocation = passCbAddress;
+		passCbvDesc.SizeInBytes = passCbByteSize;
+		m_device->CreateConstantBufferView(&passCbvDesc, CbvSrvCpuHandle(objectIndex * 2 + 1));
 	}
 
 	{
@@ -1832,6 +2239,8 @@ void Framework::InitializeSceneDefinitions()
 	sponza.WaterPlaneUvScale = 1.0f;
 	sponza.WaterPlaneColor = { 0.18f, 0.56f, 0.84f, 1.0f };
 	sponza.WaterWaveParams = { 0.010f, 10.75f, 5.20f, 2.48f };
+	sponza.ScatterBoxCount = 2048;
+	sponza.ScatterBoxScaleRange = { 0.016f, 0.040f };
 	m_sceneDefinitions.push_back(sponza);
 
 	SceneDefinition bistro = {};
@@ -1861,6 +2270,8 @@ void Framework::InitializeSceneDefinitions()
 	bistro.ForwardSpecPower = 24.0f;
 	bistro.DeferredAmbientIntensity = 0.24f;
 	bistro.DeferredAmbientColor = { 0.98f, 0.96f, 0.92f, 1.0f };
+	bistro.ScatterBoxCount = 1536;
+	bistro.ScatterBoxScaleRange = { 0.015f, 0.038f };
 	m_sceneDefinitions.push_back(bistro);
 
 	SceneDefinition sanMiguel = {};
@@ -1889,7 +2300,30 @@ void Framework::InitializeSceneDefinitions()
 	sanMiguel.ForwardSpecPower = 22.0f;
 	sanMiguel.DeferredAmbientIntensity = 0.28f;
 	sanMiguel.DeferredAmbientColor = { 0.98f, 0.92f, 0.84f, 1.0f };
+	sanMiguel.ScatterBoxCount = 1280;
+	sanMiguel.ScatterBoxScaleRange = { 0.018f, 0.042f };
 	m_sceneDefinitions.push_back(sanMiguel);
+
+	SceneDefinition cullingLab = {};
+	cullingLab.Name = L"Culling Lab";
+	cullingLab.Format = SceneAssetFormat::Procedural;
+	cullingLab.CameraPos = { 0.0f, 5.0f, -16.0f };
+	cullingLab.CameraTarget = { 0.0f, 2.5f, 0.0f };
+	cullingLab.CameraMoveSpeed = 7.0f;
+	cullingLab.EnableUvScroll = false;
+	cullingLab.EnableWindAnimation = false;
+	cullingLab.EnableScatterField = true;
+	cullingLab.ScatterFieldHalfExtents = { 18.0f, 6.0f, 18.0f };
+	cullingLab.ScatterOccluderCount = 28;
+	cullingLab.ScatterBoxCount = 1800;
+	cullingLab.ScatterBoxScaleRange = { 0.30f, 1.20f };
+	cullingLab.ForwardAmbient = { 0.16f, 0.18f, 0.22f, 1.0f };
+	cullingLab.ForwardDiffuse = { 0.98f, 0.96f, 0.92f, 1.0f };
+	cullingLab.ForwardSpecular = { 0.95f, 0.96f, 1.00f, 1.0f };
+	cullingLab.ForwardSpecPower = 42.0f;
+	cullingLab.DeferredAmbientIntensity = 0.20f;
+	cullingLab.DeferredAmbientColor = { 0.82f, 0.86f, 0.92f, 1.0f };
+	m_sceneDefinitions.push_back(cullingLab);
 }
 
 void Framework::LoadScene(size_t sceneIndex, bool resetCamera)
@@ -1957,10 +2391,555 @@ void Framework::UpdateWindowTitle() const
 		title += m_sceneDefinitions[m_currentSceneIndex].Name;
 		title += L" | 1-";
 		title += std::to_wstring(m_sceneDefinitions.size());
-		title += L" switch, F1 debug";
+		title += L" switch | F1 debug | F2 frustum | F3 octree | F4 occlusion";
 	}
 
+	title += L" | Cull: ";
+	title += CullingModeLabel(m_enableFrustumCulling, m_useOctreeForCulling);
+	title += L" | Occlusion: ";
+	title += m_enableOcclusionCulling ? L"On" : L"Off";
+	title += L" | Submitted: ";
+	title += std::to_wstring(m_visibleObjectCount);
+	title += L"/";
+	title += std::to_wstring(m_sceneObjects.size());
+	title += L" | OccCulled: ";
+	title += std::to_wstring(m_occlusionCulledObjectCount);
+	title += L" | Props: ";
+	title += std::to_wstring(m_boxObjectCount);
+
 	SetWindowTextW(MainWnd(), title.c_str());
+}
+
+void Framework::BuildSceneObjects()
+{
+	using namespace DirectX;
+
+	m_sceneObjects.clear();
+	m_visibleObjectIndices.clear();
+	m_visibleOpaqueObjectIndices.clear();
+	m_visibleTransparentObjectIndices.clear();
+	m_octreeNodes.clear();
+	m_boxObjectCount = 0;
+	m_visibleObjectCount = 0;
+	m_occlusionCulledObjectCount = 0;
+
+	if (m_sceneDefinitions.empty()) {
+		return;
+	}
+
+	const SceneDefinition& scene = m_sceneDefinitions[m_currentSceneIndex];
+
+	auto MakeObjectConstantsFromWorld = [](FXMMATRIX world) -> ObjectConstants
+	{
+		ObjectConstants obj = {};
+		XMStoreFloat4x4(&obj.World, XMMatrixTranspose(world));
+		XMStoreFloat4x4(&obj.WorldInvTranspose, XMMatrixTranspose(XMMatrixInverse(nullptr, world)));
+		return obj;
+	};
+
+	auto ComputeBoxBoundsFromWorld = [](FXMMATRIX world) -> Aabb
+	{
+		const XMFLOAT3 localCorners[8] = {
+			{ -1.0f, -1.0f, -1.0f },
+			{  1.0f, -1.0f, -1.0f },
+			{ -1.0f,  1.0f, -1.0f },
+			{  1.0f,  1.0f, -1.0f },
+			{ -1.0f, -1.0f,  1.0f },
+			{  1.0f, -1.0f,  1.0f },
+			{ -1.0f,  1.0f,  1.0f },
+			{  1.0f,  1.0f,  1.0f },
+		};
+
+		Aabb bounds = MakeInvalidAabb();
+		for (const XMFLOAT3& localCorner : localCorners)
+		{
+			const XMVECTOR worldCorner = XMVector3TransformCoord(
+				XMVectorSet(localCorner.x, localCorner.y, localCorner.z, 1.0f),
+				world);
+			XMFLOAT3 point;
+			XMStoreFloat3(&point, worldCorner);
+			ExpandAabb(bounds, point);
+		}
+		return bounds;
+	};
+
+	auto AddBoxObject = [&](const XMFLOAT3& scale, const XMFLOAT3& position, float yaw, UINT materialIndex, bool occluder)
+	{
+		const XMMATRIX world =
+			XMMatrixScaling(scale.x, scale.y, scale.z) *
+			XMMatrixRotationY(yaw) *
+			XMMatrixTranslation(position.x, position.y, position.z);
+
+		SceneObject boxObject = {};
+		boxObject.Geometry = SceneObjectGeometry::Box;
+		boxObject.MaterialIndex = materialIndex;
+		boxObject.Constants = MakeObjectConstantsFromWorld(world);
+		boxObject.Bounds = ComputeBoxBoundsFromWorld(world);
+		boxObject.Occluder = occluder;
+		m_sceneObjects.push_back(boxObject);
+		++m_boxObjectCount;
+	};
+
+	if (!scene.EnableScatterField && m_modelVertexCount > 0 && IsAabbValid(m_normalizedSceneBounds))
+	{
+		const XMFLOAT3 modelTranslation = {
+			-m_modelCenter.x * m_modelScale,
+			-m_modelCenter.y * m_modelScale,
+			-m_modelCenter.z * m_modelScale
+		};
+
+		SceneObject modelObject = {};
+		modelObject.Geometry = SceneObjectGeometry::SceneModel;
+		modelObject.MaterialIndex = 0;
+		modelObject.Constants = MakeObjectConstantsFromWorld(
+			XMMatrixScaling(m_modelScale, m_modelScale, m_modelScale) *
+			XMMatrixTranslation(modelTranslation.x, modelTranslation.y, modelTranslation.z));
+		modelObject.Bounds = m_normalizedSceneBounds;
+		m_sceneObjects.push_back(modelObject);
+	}
+
+	if (scene.EnableScatterField && IsAabbValid(m_normalizedSceneBounds) && scene.ScatterBoxCount > 0)
+	{
+		std::mt19937 rng(0xC0FFEEu + static_cast<unsigned int>(m_currentSceneIndex * 131u));
+
+		const float width = (std::max)(m_normalizedSceneBounds.Max.x - m_normalizedSceneBounds.Min.x, 0.25f);
+		const float height = (std::max)(m_normalizedSceneBounds.Max.y - m_normalizedSceneBounds.Min.y, 0.25f);
+		const float depth = (std::max)(m_normalizedSceneBounds.Max.z - m_normalizedSceneBounds.Min.z, 0.25f);
+		const float paddingX = width * 0.05f;
+		const float paddingZ = depth * 0.05f;
+
+		float scatterMinX = m_normalizedSceneBounds.Min.x + paddingX;
+		float scatterMaxX = m_normalizedSceneBounds.Max.x - paddingX;
+		float scatterMinZ = m_normalizedSceneBounds.Min.z + paddingZ;
+		float scatterMaxZ = m_normalizedSceneBounds.Max.z - paddingZ;
+
+		if (scatterMinX >= scatterMaxX)
+		{
+			scatterMinX = m_normalizedSceneBounds.Min.x;
+			scatterMaxX = m_normalizedSceneBounds.Max.x;
+		}
+
+		if (scatterMinZ >= scatterMaxZ)
+		{
+			scatterMinZ = m_normalizedSceneBounds.Min.z;
+			scatterMaxZ = m_normalizedSceneBounds.Max.z;
+		}
+
+		const UINT boxCount = scene.ScatterBoxCount;
+		const float areaAspect = width / (std::max)(depth, 0.001f);
+		const UINT gridX = (std::max)(1u, static_cast<UINT>(std::ceil(std::sqrt(static_cast<double>(boxCount) * areaAspect))));
+		const UINT gridZ = (std::max)(1u, (boxCount + gridX - 1) / gridX);
+		const float cellX = (scatterMaxX - scatterMinX) / static_cast<float>((std::max)(1u, gridX));
+		const float cellZ = (scatterMaxZ - scatterMinZ) / static_cast<float>((std::max)(1u, gridZ));
+		const float minScale = scene.ScatterBoxScaleRange.x;
+		const float maxScale = (std::max)(scene.ScatterBoxScaleRange.x, scene.ScatterBoxScaleRange.y);
+		const float groundY = m_normalizedSceneBounds.Min.y;
+		const UINT opaqueMaterialCount = static_cast<UINT>(m_scatterMaterialIndices.size() >= 5 ? 5 : m_scatterMaterialIndices.size());
+
+		m_sceneObjects.reserve(m_sceneObjects.size() + boxCount + scene.ScatterOccluderCount + 1);
+
+		if (!m_scatterMaterialIndices.empty())
+		{
+			AddBoxObject(
+				{ width * 0.5f, 0.25f, depth * 0.5f },
+				{ 0.0f, groundY + 0.25f, 0.0f },
+				0.0f,
+				m_scatterMaterialIndices[0],
+				false);
+		}
+
+		for (UINT occluderIndex = 0; occluderIndex < scene.ScatterOccluderCount; ++occluderIndex)
+		{
+			const float sx = RandomRange(rng, width * 0.018f, width * 0.055f);
+			const float sy = RandomRange(rng, height * 0.14f, height * 0.32f);
+			const float sz = RandomRange(rng, depth * 0.018f, depth * 0.045f);
+			const float centerX = RandomRange(rng, scatterMinX + sx, scatterMaxX - sx);
+			const float centerZ = RandomRange(rng, scatterMinZ + sz, scatterMaxZ - sz);
+			const float yaw = RandomRange(rng, 0.0f, XM_2PI);
+			UINT materialIndex = 0;
+			if (!m_scatterMaterialIndices.empty())
+			{
+				if (opaqueMaterialCount > 1u) {
+					materialIndex = m_scatterMaterialIndices[1u + (occluderIndex % (opaqueMaterialCount - 1u))];
+				}
+				else {
+					materialIndex = m_scatterMaterialIndices[0];
+				}
+			}
+
+			AddBoxObject(
+				{ sx, sy, sz },
+				{ centerX, groundY + sy, centerZ },
+				yaw,
+				materialIndex,
+				true);
+		}
+
+		for (UINT boxIndex = 0; boxIndex < boxCount; ++boxIndex)
+		{
+			const UINT gx = boxIndex % gridX;
+			const UINT gz = boxIndex / gridX;
+
+			float centerX = scatterMinX + (static_cast<float>(gx) + 0.5f) * cellX;
+			float centerZ = scatterMinZ + (static_cast<float>(gz) + 0.5f) * cellZ;
+			centerX += RandomRange(rng, -0.35f, 0.35f) * cellX;
+			centerZ += RandomRange(rng, -0.35f, 0.35f) * cellZ;
+
+			const float scale = RandomRange(rng, minScale, maxScale);
+			const UINT profile = boxIndex % 4u;
+			XMFLOAT3 objectScale = { scale, scale, scale };
+			if (profile == 1u) {
+				objectScale = { scale * 0.55f, scale * 1.90f, scale * 0.55f };
+			}
+			else if (profile == 2u) {
+				objectScale = { scale * 1.75f, scale * 0.40f, scale * 1.10f };
+			}
+			else if (profile == 3u) {
+				objectScale = { scale * 1.90f, scale * 0.65f, scale * 0.45f };
+			}
+
+			centerX = std::clamp(centerX, scatterMinX + objectScale.x, scatterMaxX - objectScale.x);
+			centerZ = std::clamp(centerZ, scatterMinZ + objectScale.z, scatterMaxZ - objectScale.z);
+
+			const bool transparent = !m_scatterMaterialIndices.empty() && (boxIndex % 9u == 0u);
+			UINT materialIndex = 0;
+			if (!m_scatterMaterialIndices.empty())
+			{
+				if (transparent && m_scatterMaterialIndices.size() > opaqueMaterialCount) {
+					const UINT glassBase = opaqueMaterialCount;
+					const UINT glassCount = static_cast<UINT>(m_scatterMaterialIndices.size()) - glassBase;
+					materialIndex = m_scatterMaterialIndices[glassBase + (boxIndex % glassCount)];
+				}
+				else
+				{
+					const UINT usableOpaqueCount = (std::max)(1u, opaqueMaterialCount);
+					materialIndex = m_scatterMaterialIndices[boxIndex % usableOpaqueCount];
+				}
+			}
+
+			AddBoxObject(
+				objectScale,
+				{ centerX, groundY + objectScale.y, centerZ },
+				RandomRange(rng, 0.0f, XM_2PI),
+				materialIndex,
+				!transparent);
+		}
+	}
+
+	m_visibleObjectIndices.reserve(m_sceneObjects.size());
+	m_visibleOpaqueObjectIndices.reserve(m_sceneObjects.size());
+	m_visibleTransparentObjectIndices.reserve(m_sceneObjects.size());
+	m_visibleObjectCount = static_cast<UINT>(m_sceneObjects.size());
+}
+
+void Framework::BuildObjectConstantBuffer()
+{
+	const UINT objectCount = std::max<UINT>(1u, static_cast<UINT>(m_sceneObjects.size()));
+	m_objectCB = std::make_unique<UploadBuffer<ObjectConstants>>(m_device.Get(), objectCount, true);
+
+	if (m_sceneObjects.empty())
+	{
+		m_objectCB->CopyData(0, ObjectConstants{});
+		return;
+	}
+
+	for (UINT objectIndex = 0; objectIndex < static_cast<UINT>(m_sceneObjects.size()); ++objectIndex) {
+		m_objectCB->CopyData(objectIndex, m_sceneObjects[objectIndex].Constants);
+	}
+}
+
+void Framework::BuildOctree()
+{
+	m_octreeNodes.clear();
+	if (m_sceneObjects.empty()) {
+		return;
+	}
+
+	Framework::Aabb rootBounds = MakeInvalidAabb();
+	for (const SceneObject& object : m_sceneObjects) {
+		ExpandAabb(rootBounds, object.Bounds);
+	}
+
+	if (!IsAabbValid(rootBounds)) {
+		return;
+	}
+
+	constexpr UINT kLeafObjectThreshold = 32;
+	constexpr UINT kMaxOctreeDepth = 6;
+
+	std::vector<UINT> rootObjectIndices(m_sceneObjects.size());
+	for (UINT objectIndex = 0; objectIndex < static_cast<UINT>(m_sceneObjects.size()); ++objectIndex) {
+		rootObjectIndices[objectIndex] = objectIndex;
+	}
+
+	auto BuildNodeRecursive = [&](auto&& self, const Framework::Aabb& nodeBounds, const std::vector<UINT>& objectIndices, UINT depth) -> int
+	{
+		const int nodeIndex = static_cast<int>(m_octreeNodes.size());
+		m_octreeNodes.push_back({});
+		m_octreeNodes[nodeIndex].Bounds = nodeBounds;
+
+		if (depth >= kMaxOctreeDepth || objectIndices.size() <= kLeafObjectThreshold)
+		{
+			m_octreeNodes[nodeIndex].ObjectIndices = objectIndices;
+			return nodeIndex;
+		}
+
+		std::array<Framework::Aabb, 8> childBounds = {};
+		for (int childIndex = 0; childIndex < 8; ++childIndex) {
+			childBounds[childIndex] = BuildChildAabb(nodeBounds, childIndex);
+		}
+
+		std::array<std::vector<UINT>, 8> childObjectLists = {};
+		std::vector<UINT> residentObjects;
+		residentObjects.reserve(objectIndices.size());
+
+		for (UINT objectIndex : objectIndices)
+		{
+			const Framework::Aabb& objectBounds = m_sceneObjects[objectIndex].Bounds;
+			int fittingChildIndex = -1;
+
+			for (int childIndex = 0; childIndex < 8; ++childIndex)
+			{
+				if (AabbFitsInside(objectBounds, childBounds[childIndex]))
+				{
+					fittingChildIndex = childIndex;
+					break;
+				}
+			}
+
+			if (fittingChildIndex >= 0) {
+				childObjectLists[fittingChildIndex].push_back(objectIndex);
+			}
+			else {
+				residentObjects.push_back(objectIndex);
+			}
+		}
+
+		m_octreeNodes[nodeIndex].ObjectIndices = std::move(residentObjects);
+
+		for (int childIndex = 0; childIndex < 8; ++childIndex)
+		{
+			if (!childObjectLists[childIndex].empty()) {
+				m_octreeNodes[nodeIndex].Children[childIndex] =
+					self(self, childBounds[childIndex], childObjectLists[childIndex], depth + 1);
+			}
+		}
+
+		return nodeIndex;
+	};
+
+	BuildNodeRecursive(BuildNodeRecursive, rootBounds, rootObjectIndices, 0);
+}
+
+void Framework::UpdateVisibleObjects(const DirectX::XMMATRIX& viewProj)
+{
+	m_visibleObjectIndices.clear();
+	m_visibleOpaqueObjectIndices.clear();
+	m_visibleTransparentObjectIndices.clear();
+	m_occlusionCulledObjectCount = 0;
+
+	if (m_sceneObjects.empty())
+	{
+		m_visibleObjectCount = 0;
+		return;
+	}
+
+	const SceneDefinition& scene = m_sceneDefinitions[m_currentSceneIndex];
+	std::vector<UINT> candidateObjectIndices;
+
+	if (!m_enableFrustumCulling)
+	{
+		candidateObjectIndices.reserve(m_sceneObjects.size());
+		for (UINT objectIndex = 0; objectIndex < static_cast<UINT>(m_sceneObjects.size()); ++objectIndex) {
+			candidateObjectIndices.push_back(objectIndex);
+		}
+	}
+	else
+	{
+		const std::array<DirectX::XMFLOAT4, 6> frustumPlanes = ExtractFrustumPlanes(viewProj);
+
+		if (m_useOctreeForCulling && !m_octreeNodes.empty())
+		{
+			auto AppendNodeSubtree = [&](auto&& self, int nodeIndex) -> void
+			{
+				if (nodeIndex < 0 || nodeIndex >= static_cast<int>(m_octreeNodes.size())) {
+					return;
+				}
+
+				const OctreeNode& node = m_octreeNodes[nodeIndex];
+				candidateObjectIndices.insert(
+					candidateObjectIndices.end(),
+					node.ObjectIndices.begin(),
+					node.ObjectIndices.end());
+
+				for (int childIndex : node.Children) {
+					self(self, childIndex);
+				}
+			};
+
+			auto CollectVisibleNodeObjects = [&](auto&& self, int nodeIndex, bool acceptAll) -> void
+			{
+				if (nodeIndex < 0 || nodeIndex >= static_cast<int>(m_octreeNodes.size())) {
+					return;
+				}
+
+				const OctreeNode& node = m_octreeNodes[nodeIndex];
+				bool subtreeAccepted = acceptAll;
+
+				if (!subtreeAccepted)
+				{
+					const AabbFrustumRelation nodeRelation = ClassifyAabbAgainstFrustum(node.Bounds, frustumPlanes);
+					if (nodeRelation == AabbFrustumRelation::Outside) {
+						return;
+					}
+					subtreeAccepted = (nodeRelation == AabbFrustumRelation::Inside);
+				}
+
+				if (subtreeAccepted)
+				{
+					AppendNodeSubtree(AppendNodeSubtree, nodeIndex);
+					return;
+				}
+
+				for (UINT objectIndex : node.ObjectIndices)
+				{
+					if (ClassifyAabbAgainstFrustum(m_sceneObjects[objectIndex].Bounds, frustumPlanes) != AabbFrustumRelation::Outside) {
+						candidateObjectIndices.push_back(objectIndex);
+					}
+				}
+
+				for (int childIndex : node.Children) {
+					self(self, childIndex, false);
+				}
+			};
+
+			CollectVisibleNodeObjects(CollectVisibleNodeObjects, 0, false);
+			std::sort(candidateObjectIndices.begin(), candidateObjectIndices.end());
+			candidateObjectIndices.erase(
+				std::unique(candidateObjectIndices.begin(), candidateObjectIndices.end()),
+				candidateObjectIndices.end());
+		}
+		else
+		{
+			candidateObjectIndices.reserve(m_sceneObjects.size());
+			for (UINT objectIndex = 0; objectIndex < static_cast<UINT>(m_sceneObjects.size()); ++objectIndex)
+			{
+				if (ClassifyAabbAgainstFrustum(m_sceneObjects[objectIndex].Bounds, frustumPlanes) != AabbFrustumRelation::Outside) {
+					candidateObjectIndices.push_back(objectIndex);
+				}
+			}
+		}
+	}
+
+	auto IsTransparentObject = [&](UINT objectIndex) -> bool
+	{
+		const SceneObject& object = m_sceneObjects[objectIndex];
+		if (object.Geometry == SceneObjectGeometry::SceneModel) {
+			return false;
+		}
+
+		if (object.MaterialIndex >= m_modelMaterials.size()) {
+			return false;
+		}
+
+		const ModelMaterial& material = m_modelMaterials[object.MaterialIndex];
+		return material.Transparent || material.DiffuseAlbedo.w < 0.999f;
+	};
+
+	if (scene.EnableScatterField && m_enableOcclusionCulling)
+	{
+		const XMFLOAT3 eyePos = m_camPos;
+		std::sort(
+			candidateObjectIndices.begin(),
+			candidateObjectIndices.end(),
+			[&](UINT lhs, UINT rhs)
+			{
+				const XMFLOAT3 lhsCenter = AabbCenter(m_sceneObjects[lhs].Bounds);
+				const XMFLOAT3 rhsCenter = AabbCenter(m_sceneObjects[rhs].Bounds);
+				const float lhsDx = lhsCenter.x - eyePos.x;
+				const float lhsDy = lhsCenter.y - eyePos.y;
+				const float lhsDz = lhsCenter.z - eyePos.z;
+				const float rhsDx = rhsCenter.x - eyePos.x;
+				const float rhsDy = rhsCenter.y - eyePos.y;
+				const float rhsDz = rhsCenter.z - eyePos.z;
+				return (lhsDx * lhsDx + lhsDy * lhsDy + lhsDz * lhsDz)
+					< (rhsDx * rhsDx + rhsDy * rhsDy + rhsDz * rhsDz);
+			});
+
+		const int rasterWidth = 160;
+		const int rasterHeight = 90;
+		std::vector<float> occlusionDepth(static_cast<size_t>(rasterWidth) * rasterHeight, 1.0f);
+
+		for (UINT objectIndex : candidateObjectIndices)
+		{
+			const bool transparent = IsTransparentObject(objectIndex);
+			OcclusionScreenRect screenRect = {};
+			const bool hasScreenRect = ProjectAabbToScreenRect(
+				m_sceneObjects[objectIndex].Bounds,
+				viewProj,
+				eyePos,
+				rasterWidth,
+				rasterHeight,
+				screenRect);
+
+			if (hasScreenRect && IsOccludedByDepthPyramid(occlusionDepth, rasterWidth, screenRect))
+			{
+				++m_occlusionCulledObjectCount;
+				continue;
+			}
+
+			m_visibleObjectIndices.push_back(objectIndex);
+			if (transparent) {
+				m_visibleTransparentObjectIndices.push_back(objectIndex);
+			}
+			else {
+				m_visibleOpaqueObjectIndices.push_back(objectIndex);
+			}
+
+			const bool canOcclude =
+				!transparent &&
+				m_sceneObjects[objectIndex].Occluder &&
+				(m_sceneObjects[objectIndex].MaterialIndex >= m_modelMaterials.size()
+					? true
+					: m_modelMaterials[m_sceneObjects[objectIndex].MaterialIndex].Occluder);
+
+			if (canOcclude && hasScreenRect) {
+				RasterizeOccluderToDepthPyramid(occlusionDepth, rasterWidth, screenRect);
+			}
+		}
+	}
+	else
+	{
+		for (UINT objectIndex : candidateObjectIndices)
+		{
+			m_visibleObjectIndices.push_back(objectIndex);
+			if (IsTransparentObject(objectIndex)) {
+				m_visibleTransparentObjectIndices.push_back(objectIndex);
+			}
+			else {
+				m_visibleOpaqueObjectIndices.push_back(objectIndex);
+			}
+		}
+	}
+
+	std::sort(
+		m_visibleTransparentObjectIndices.begin(),
+		m_visibleTransparentObjectIndices.end(),
+		[&](UINT lhs, UINT rhs)
+		{
+			const XMFLOAT3 lhsCenter = AabbCenter(m_sceneObjects[lhs].Bounds);
+			const XMFLOAT3 rhsCenter = AabbCenter(m_sceneObjects[rhs].Bounds);
+			const float lhsDx = lhsCenter.x - m_camPos.x;
+			const float lhsDy = lhsCenter.y - m_camPos.y;
+			const float lhsDz = lhsCenter.z - m_camPos.z;
+			const float rhsDx = rhsCenter.x - m_camPos.x;
+			const float rhsDy = rhsCenter.y - m_camPos.y;
+			const float rhsDz = rhsCenter.z - m_camPos.z;
+			return (lhsDx * lhsDx + lhsDy * lhsDy + lhsDz * lhsDz)
+				> (rhsDx * rhsDx + rhsDy * rhsDy + rhsDz * rhsDz);
+		});
+
+	m_visibleObjectCount = static_cast<UINT>(m_visibleObjectIndices.size());
 }
 
 void Framework::BuildSceneLights()
@@ -2701,7 +3680,7 @@ void Framework::BuildSceneGeometryUpload()
 	}
 
 	const SceneDefinition& scene = m_sceneDefinitions[m_currentSceneIndex];
-	if (scene.ModelPaths.empty()) {
+	if (scene.ModelPaths.empty() && !scene.EnableScatterField && scene.Format != SceneAssetFormat::Procedural) {
 		throw std::runtime_error("Scene has no model paths.");
 	}
 
@@ -2714,6 +3693,7 @@ void Framework::BuildSceneGeometryUpload()
 	FlushCommandQueue();
 
 	m_modelMaterials.clear();
+	m_scatterMaterialIndices.clear();
 	m_modelSubsets.clear();
 	m_textureResources.clear();
 	m_textureUploadResources.clear();
@@ -2778,6 +3758,8 @@ void Framework::BuildSceneGeometryUpload()
 		mat.DisplacementScale = 0.0f;
 		mat.DisplacementBias = 0.0f;
 		mat.AlphaCutoff = scene.AlphaCutoff;
+		mat.Transparent = false;
+		mat.Occluder = true;
 		mat.SrvBaseIndex = 0;
 		return mat;
 	};
@@ -2819,6 +3801,8 @@ void Framework::BuildSceneGeometryUpload()
 
 		if (IsTransparentMaterial(materialNameLower)) {
 			mat.AlphaCutoff = 0.0f;
+			mat.Transparent = true;
+			mat.Occluder = false;
 			DisableDisplacement(mat);
 		}
 	};
@@ -2826,6 +3810,32 @@ void Framework::BuildSceneGeometryUpload()
 	ModelMaterial defaultMaterial = MakeDefaultMaterial();
 	defaultMaterial.SrvBaseIndex = 0;
 	m_modelMaterials.push_back(defaultMaterial);
+
+	if (scene.EnableScatterField)
+	{
+		auto AppendScatterMaterial = [&](const DirectX::XMFLOAT4& albedo, bool transparent, bool occluder) -> UINT
+		{
+			ModelMaterial mat = MakeDefaultMaterial();
+			mat.DiffuseAlbedo = albedo;
+			mat.AlphaCutoff = 0.0f;
+			mat.Transparent = transparent;
+			mat.Occluder = occluder;
+			mat.SrvBaseIndex = static_cast<UINT>(m_modelMaterials.size()) * MaterialTextureSlotCount;
+
+			const UINT materialIndex = static_cast<UINT>(m_modelMaterials.size());
+			m_modelMaterials.push_back(mat);
+			m_scatterMaterialIndices.push_back(materialIndex);
+			return materialIndex;
+		};
+
+		AppendScatterMaterial({ 0.16f, 0.18f, 0.22f, 1.0f }, false, true);  // floor
+		AppendScatterMaterial({ 0.72f, 0.30f, 0.18f, 1.0f }, false, true);  // warm matte
+		AppendScatterMaterial({ 0.18f, 0.55f, 0.72f, 1.0f }, false, true);  // cool matte
+		AppendScatterMaterial({ 0.78f, 0.80f, 0.84f, 1.0f }, false, true);  // steel
+		AppendScatterMaterial({ 0.78f, 0.63f, 0.24f, 1.0f }, false, true);  // brass-like
+		AppendScatterMaterial({ 0.48f, 0.82f, 0.96f, 0.34f }, true, false); // cyan glass
+		AppendScatterMaterial({ 0.98f, 0.76f, 0.42f, 0.28f }, true, false); // amber glass
+	}
 
 	XMFLOAT3 minP = { +FLT_MAX, +FLT_MAX, +FLT_MAX };
 	XMFLOAT3 maxP = { -FLT_MAX, -FLT_MAX, -FLT_MAX };
@@ -2850,7 +3860,7 @@ void Framework::BuildSceneGeometryUpload()
 		ExpandBounds(v2.Pos);
 	};
 
-	std::vector<std::vector<Vertex>> materialVertices(1);
+	std::vector<std::vector<Vertex>> materialVertices(m_modelMaterials.size());
 
 	for (const std::filesystem::path& modelPath : scene.ModelPaths)
 	{
@@ -3358,20 +4368,44 @@ void Framework::BuildSceneGeometryUpload()
 		vertices.insert(vertices.end(), bucket.begin(), bucket.end());
 	}
 
-	if (vertices.empty()) {
-		throw std::runtime_error("Scene loaded but produced 0 vertices.");
+	if (vertices.empty())
+	{
+		if (!scene.EnableScatterField) {
+			throw std::runtime_error("Scene loaded but produced 0 vertices.");
+		}
+
+		m_modelCenter = { 0.0f, 0.0f, 0.0f };
+		m_modelScale = 1.0f;
+		m_normalizedSceneBounds = {
+			{ -scene.ScatterFieldHalfExtents.x, -scene.ScatterFieldHalfExtents.y, -scene.ScatterFieldHalfExtents.z },
+			{  scene.ScatterFieldHalfExtents.x,  scene.ScatterFieldHalfExtents.y,  scene.ScatterFieldHalfExtents.z }
+		};
 	}
+	else
+	{
+		m_modelCenter = {
+			0.5f * (minP.x + maxP.x),
+			0.5f * (minP.y + maxP.y),
+			0.5f * (minP.z + maxP.z)
+		};
 
-	m_modelCenter = {
-		0.5f * (minP.x + maxP.x),
-		0.5f * (minP.y + maxP.y),
-		0.5f * (minP.z + maxP.z)
-	};
-
-	float maxDim = maxP.x - minP.x;
-	maxDim = (std::max)(maxDim, maxP.y - minP.y);
-	maxDim = (std::max)(maxDim, maxP.z - minP.z);
-	m_modelScale = (maxDim > 1e-6f) ? (2.0f / maxDim) : 1.0f;
+		float maxDim = maxP.x - minP.x;
+		maxDim = (std::max)(maxDim, maxP.y - minP.y);
+		maxDim = (std::max)(maxDim, maxP.z - minP.z);
+		m_modelScale = (maxDim > 1e-6f) ? (2.0f / maxDim) : 1.0f;
+		m_normalizedSceneBounds = {
+			{
+				(minP.x - m_modelCenter.x) * m_modelScale,
+				(minP.y - m_modelCenter.y) * m_modelScale,
+				(minP.z - m_modelCenter.z) * m_modelScale
+			},
+			{
+				(maxP.x - m_modelCenter.x) * m_modelScale,
+				(maxP.y - m_modelCenter.y) * m_modelScale,
+				(maxP.z - m_modelCenter.z) * m_modelScale
+			}
+		};
+	}
 
 	m_modelVertexCount = static_cast<UINT>(vertices.size());
 	const UINT vbByteSize = static_cast<UINT>(vertices.size() * sizeof(Vertex));
@@ -3508,45 +4542,48 @@ void Framework::BuildSceneGeometryUpload()
 		m_textureUploadResources.push_back(upload);
 	}
 
-	const D3D12_RESOURCE_DESC vbDesc = MakeBufferDesc(vbByteSize);
-	ThrowIfFailed(m_device->CreateCommittedResource(
-		&defaultHeap,
-		D3D12_HEAP_FLAG_NONE,
-		&vbDesc,
-		D3D12_RESOURCE_STATE_COMMON,
-		nullptr,
-		IID_PPV_ARGS(m_modelVB.GetAddressOf())));
+	if (vbByteSize > 0)
+	{
+		const D3D12_RESOURCE_DESC vbDesc = MakeBufferDesc(vbByteSize);
+		ThrowIfFailed(m_device->CreateCommittedResource(
+			&defaultHeap,
+			D3D12_HEAP_FLAG_NONE,
+			&vbDesc,
+			D3D12_RESOURCE_STATE_COMMON,
+			nullptr,
+			IID_PPV_ARGS(m_modelVB.GetAddressOf())));
 
-	ThrowIfFailed(m_device->CreateCommittedResource(
-		&uploadHeap,
-		D3D12_HEAP_FLAG_NONE,
-		&vbDesc,
-		D3D12_RESOURCE_STATE_GENERIC_READ,
-		nullptr,
-		IID_PPV_ARGS(m_modelVBUpload.GetAddressOf())));
+		ThrowIfFailed(m_device->CreateCommittedResource(
+			&uploadHeap,
+			D3D12_HEAP_FLAG_NONE,
+			&vbDesc,
+			D3D12_RESOURCE_STATE_GENERIC_READ,
+			nullptr,
+			IID_PPV_ARGS(m_modelVBUpload.GetAddressOf())));
 
-	void* vbMapped = nullptr;
-	ThrowIfFailed(m_modelVBUpload->Map(0, nullptr, &vbMapped));
-	memcpy(vbMapped, vertices.data(), vbByteSize);
-	m_modelVBUpload->Unmap(0, nullptr);
+		void* vbMapped = nullptr;
+		ThrowIfFailed(m_modelVBUpload->Map(0, nullptr, &vbMapped));
+		memcpy(vbMapped, vertices.data(), vbByteSize);
+		m_modelVBUpload->Unmap(0, nullptr);
 
-	D3D12_RESOURCE_BARRIER vbToCopyDest = {};
-	vbToCopyDest.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-	vbToCopyDest.Transition.pResource = m_modelVB.Get();
-	vbToCopyDest.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
-	vbToCopyDest.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
-	vbToCopyDest.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-	m_commandList->ResourceBarrier(1, &vbToCopyDest);
+		D3D12_RESOURCE_BARRIER vbToCopyDest = {};
+		vbToCopyDest.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+		vbToCopyDest.Transition.pResource = m_modelVB.Get();
+		vbToCopyDest.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
+		vbToCopyDest.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+		vbToCopyDest.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+		m_commandList->ResourceBarrier(1, &vbToCopyDest);
 
-	m_commandList->CopyBufferRegion(m_modelVB.Get(), 0, m_modelVBUpload.Get(), 0, vbByteSize);
+		m_commandList->CopyBufferRegion(m_modelVB.Get(), 0, m_modelVBUpload.Get(), 0, vbByteSize);
 
-	D3D12_RESOURCE_BARRIER vbBarrier = {};
-	vbBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-	vbBarrier.Transition.pResource = m_modelVB.Get();
-	vbBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-	vbBarrier.Transition.StateAfter = D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER;
-	vbBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-	m_commandList->ResourceBarrier(1, &vbBarrier);
+		D3D12_RESOURCE_BARRIER vbBarrier = {};
+		vbBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+		vbBarrier.Transition.pResource = m_modelVB.Get();
+		vbBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+		vbBarrier.Transition.StateAfter = D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER;
+		vbBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+		m_commandList->ResourceBarrier(1, &vbBarrier);
+	}
 
 	ThrowIfFailed(m_commandList->Close());
 	ID3D12CommandList* cmdLists[] = { m_commandList.Get() };
@@ -3556,9 +4593,20 @@ void Framework::BuildSceneGeometryUpload()
 	m_textureUploadResources.clear();
 	m_modelVBUpload.Reset();
 
-	m_modelVBV.BufferLocation = m_modelVB->GetGPUVirtualAddress();
-	m_modelVBV.StrideInBytes = sizeof(Vertex);
-	m_modelVBV.SizeInBytes = vbByteSize;
+	if (m_modelVB)
+	{
+		m_modelVBV.BufferLocation = m_modelVB->GetGPUVirtualAddress();
+		m_modelVBV.StrideInBytes = sizeof(Vertex);
+		m_modelVBV.SizeInBytes = vbByteSize;
+	}
+	else
+	{
+		m_modelVBV = {};
+	}
+
+	BuildSceneObjects();
+	BuildObjectConstantBuffer();
+	BuildOctree();
 }
 
 void Framework::OnMouseDown(HWND hwnd, WPARAM btnState, int x, int y)

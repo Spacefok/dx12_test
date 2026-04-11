@@ -57,6 +57,7 @@ void RenderingSystem::BuildShaders()
 	m_geometryHsByteCode = CompileShader(L"shader\\DeferredGeometry.hlsl", nullptr, "HSMain", "hs_5_1");
 	m_geometryDsByteCode = CompileShader(L"shader\\DeferredGeometry.hlsl", nullptr, "DSMain", "ds_5_1");
 	m_geometryPsByteCode = CompileShader(L"shader\\DeferredGeometry.hlsl", nullptr, "PSGBuffer", "ps_5_1");
+	m_forwardTransparentPsByteCode = CompileShader(L"shader\\DeferredGeometry.hlsl", nullptr, "PSTransparent", "ps_5_1");
 
 	m_lightingVsByteCode = CompileShader(L"shader\\DeferredLighting.hlsl", nullptr, "VSFullscreen", "vs_5_1");
 	m_lightingPsByteCode = CompileShader(L"shader\\DeferredLighting.hlsl", nullptr, "PSLighting", "ps_5_1");
@@ -325,6 +326,75 @@ void RenderingSystem::BuildPSOs(ID3D12Device* device, DXGI_FORMAT backBufferForm
 		psoDesc.SampleDesc.Quality = 0;
 
 		ThrowIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&m_geometryTessellationPso)));
+	}
+
+	{
+		D3D12_INPUT_ELEMENT_DESC inputLayout[] =
+		{
+			{ "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,
+			  D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+
+			{ "NORMAL",   0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12,
+			  D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+
+			{ "COLOR",    0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 24,
+			  D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+
+			{ "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 40,
+			  D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+
+			{ "TANGENT",  0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 48,
+			  D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+		};
+
+		D3D12_BLEND_DESC blendDesc = {};
+		blendDesc.AlphaToCoverageEnable = FALSE;
+		blendDesc.IndependentBlendEnable = FALSE;
+		{
+			D3D12_RENDER_TARGET_BLEND_DESC rt = {};
+			rt.BlendEnable = TRUE;
+			rt.LogicOpEnable = FALSE;
+			rt.SrcBlend = D3D12_BLEND_SRC_ALPHA;
+			rt.DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
+			rt.BlendOp = D3D12_BLEND_OP_ADD;
+			rt.SrcBlendAlpha = D3D12_BLEND_ONE;
+			rt.DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
+			rt.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+			rt.LogicOp = D3D12_LOGIC_OP_NOOP;
+			rt.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+			blendDesc.RenderTarget[0] = rt;
+		}
+
+		D3D12_DEPTH_STENCIL_DESC dsDesc = {};
+		dsDesc.DepthEnable = TRUE;
+		dsDesc.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+		dsDesc.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+		dsDesc.StencilEnable = FALSE;
+		dsDesc.StencilReadMask = D3D12_DEFAULT_STENCIL_READ_MASK;
+		dsDesc.StencilWriteMask = D3D12_DEFAULT_STENCIL_WRITE_MASK;
+		dsDesc.FrontFace.StencilFailOp = D3D12_STENCIL_OP_KEEP;
+		dsDesc.FrontFace.StencilDepthFailOp = D3D12_STENCIL_OP_KEEP;
+		dsDesc.FrontFace.StencilPassOp = D3D12_STENCIL_OP_KEEP;
+		dsDesc.FrontFace.StencilFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+		dsDesc.BackFace = dsDesc.FrontFace;
+
+		D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
+		psoDesc.InputLayout = { inputLayout, _countof(inputLayout) };
+		psoDesc.pRootSignature = m_geometryRootSignature.Get();
+		psoDesc.VS = { m_geometryBasicVsByteCode->GetBufferPointer(), m_geometryBasicVsByteCode->GetBufferSize() };
+		psoDesc.PS = { m_forwardTransparentPsByteCode->GetBufferPointer(), m_forwardTransparentPsByteCode->GetBufferSize() };
+		psoDesc.RasterizerState = DefaultRasterizer(D3D12_CULL_MODE_BACK);
+		psoDesc.BlendState = blendDesc;
+		psoDesc.DepthStencilState = dsDesc;
+		psoDesc.SampleMask = D3D12_DEFAULT_SAMPLE_MASK;
+		psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+		psoDesc.NumRenderTargets = 1;
+		psoDesc.RTVFormats[0] = backBufferFormat;
+		psoDesc.DSVFormat = depthStencilFormat;
+		psoDesc.SampleDesc.Count = 1;
+		psoDesc.SampleDesc.Quality = 0;
+
+		ThrowIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&m_forwardTransparentPso)));
 	}
 
 	{
