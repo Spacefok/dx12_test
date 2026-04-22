@@ -1,0 +1,14 @@
+# Keep GitHub language stats focused on the renderer code instead of bundled third-party sources.
+include/tiny_obj_loader.h linguist-vendored
+include/ufbx.h linguist-vendored
+src/ufbx.c linguist-vendored
+
+# Treat packaged art assets as binary files in diffs.
+*.dds binary
+*.fbx binary
+*.hdr binary
+*.jpg binary
+*.jpeg binary
+*.png binary
+*.psd binary
+*.tga binary

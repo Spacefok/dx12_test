@@ -19,11 +19,42 @@ using Microsoft::WRL::ComPtr;
 #include <string>
 #include <comdef.h>
 
+inline std::string WideToSystemString(const std::wstring& value) {
+	if (value.empty()) {
+		return {};
+	}
+
+	const int requiredSize = WideCharToMultiByte(
+		CP_ACP,
+		0,
+		value.c_str(),
+		-1,
+		nullptr,
+		0,
+		nullptr,
+		nullptr);
+	if (requiredSize <= 1) {
+		return {};
+	}
+
+	std::string result(static_cast<size_t>(requiredSize - 1), '\0');
+	WideCharToMultiByte(
+		CP_ACP,
+		0,
+		value.c_str(),
+		-1,
+		result.data(),
+		requiredSize,
+		nullptr,
+		nullptr);
+	return result;
+}
+
 inline void ThrowIfFailed(HRESULT hr) {
 	if (FAILED(hr)) {
 		_com_error err(hr);
 		std::wstring msg = err.ErrorMessage();
-		throw std::runtime_error(std::string(msg.begin(), msg.end()));
+		throw std::runtime_error(WideToSystemString(msg));
 	}
 }
 

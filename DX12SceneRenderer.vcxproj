@@ -22,7 +22,7 @@
     <VCProjectVersion>17.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>
     <ProjectGuid>{7618c4d6-f4d4-416c-9d71-33c977013eec}</ProjectGuid>
-    <RootNamespace>Lab4</RootNamespace>
+    <RootNamespace>DX12SceneRenderer</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />

@@ -2538,7 +2538,7 @@ void Framework::UpdateWindowTitle() const
 		return;
 	}
 
-	std::wstring title = m_title ? m_title : L"CG Window";
+	std::wstring title = m_title ? m_title : L"DX12 Scene Renderer";
 	if (!m_sceneDefinitions.empty()) {
 		title += L" | Scene: ";
 		title += m_sceneDefinitions[m_currentSceneIndex].Name;

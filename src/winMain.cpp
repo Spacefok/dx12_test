@@ -6,7 +6,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
 {
     try
     {
-        Framework app(1280, 720, L"CG Window");
+        Framework app(1280, 720, L"DX12 Scene Renderer");
         if (!app.Init()) return 0;
         return app.Run();
     }

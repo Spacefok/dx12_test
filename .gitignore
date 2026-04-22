@@ -416,3 +416,14 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+# Windows Explorer / shell cruft
+Thumbs.db
+Desktop.ini
+
+# Large or editor-only asset sources should stay local unless moved to LFS/releases.
+assets/**/*.psd
+assets/**/*.blend
+assets/**/*.blend1
+assets/**/*.max
+assets/**/*.fbx
