@@ -17,6 +17,13 @@ public:
 	ID3D12RootSignature* LightingRootSignature() const { return m_lightingRootSignature.Get(); }
 	ID3D12PipelineState* LightingPSO() const { return m_lightingPso.Get(); }
 
+	ID3D12RootSignature* ParticleGraphicsRootSignature() const { return m_particleGraphicsRootSignature.Get(); }
+	ID3D12PipelineState* ParticleGraphicsPSO() const { return m_particleGraphicsPso.Get(); }
+	ID3D12RootSignature* ParticleComputeRootSignature() const { return m_particleComputeRootSignature.Get(); }
+	ID3D12PipelineState* ParticleComputePSO() const { return m_particleComputePso.Get(); }
+	ID3D12PipelineState* ParticleSortInitPSO() const { return m_particleSortInitPso.Get(); }
+	ID3D12PipelineState* ParticleSortStepPSO() const { return m_particleSortStepPso.Get(); }
+
 private:
 	ComPtr<ID3DBlob> m_geometryBasicVsByteCode;
 	ComPtr<ID3DBlob> m_geometryControlPointVsByteCode;
@@ -26,14 +33,26 @@ private:
 	ComPtr<ID3DBlob> m_forwardTransparentPsByteCode;
 	ComPtr<ID3DBlob> m_lightingVsByteCode;
 	ComPtr<ID3DBlob> m_lightingPsByteCode;
+	ComPtr<ID3DBlob> m_particleVsByteCode;
+	ComPtr<ID3DBlob> m_particleGsByteCode;
+	ComPtr<ID3DBlob> m_particlePsByteCode;
+	ComPtr<ID3DBlob> m_particleCsByteCode;
+	ComPtr<ID3DBlob> m_particleSortInitCsByteCode;
+	ComPtr<ID3DBlob> m_particleSortStepCsByteCode;
 
 	ComPtr<ID3D12RootSignature> m_geometryRootSignature;
 	ComPtr<ID3D12RootSignature> m_lightingRootSignature;
+	ComPtr<ID3D12RootSignature> m_particleGraphicsRootSignature;
+	ComPtr<ID3D12RootSignature> m_particleComputeRootSignature;
 
 	ComPtr<ID3D12PipelineState> m_geometryBasicPso;
 	ComPtr<ID3D12PipelineState> m_geometryTessellationPso;
 	ComPtr<ID3D12PipelineState> m_forwardTransparentPso;
 	ComPtr<ID3D12PipelineState> m_lightingPso;
+	ComPtr<ID3D12PipelineState> m_particleGraphicsPso;
+	ComPtr<ID3D12PipelineState> m_particleComputePso;
+	ComPtr<ID3D12PipelineState> m_particleSortInitPso;
+	ComPtr<ID3D12PipelineState> m_particleSortStepPso;
 };
 
 #endif // RENDERING_SYSTEM_HPP

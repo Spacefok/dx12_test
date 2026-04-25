@@ -108,6 +108,7 @@ private:
 	std::unique_ptr<UploadBuffer<GpuDirectionalLight>> m_directionalLightSB;
 	std::unique_ptr<UploadBuffer<GpuPointLight>> m_pointLightSB;
 	std::unique_ptr<UploadBuffer<GpuSpotLight>> m_spotLightSB;
+	std::unique_ptr<UploadBuffer<ParticleSimConstants>> m_particleSimCB;
 
 	Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> m_cbvHeap;
 
@@ -119,6 +120,10 @@ private:
 	UINT m_directionalLightSrvIndex = 0;
 	UINT m_pointLightSrvIndex = 0;
 	UINT m_spotLightSrvIndex = 0;
+	UINT m_particleUavBaseIndex = 0;
+	UINT m_particleSrvBaseIndex = 0;
+	UINT m_particleSortUavIndex = 0;
+	UINT m_particleSortSrvIndex = 0;
 
 	std::array<GpuDirectionalLight, MaxDirectionalLights> m_directionalLights{};
 	std::array<GpuPointLight, MaxPointLights> m_pointLights{};
@@ -126,6 +131,29 @@ private:
 	UINT m_directionalLightCount = 0;
 	UINT m_pointLightCount = 0;
 	UINT m_spotLightCount = 0;
+
+	static constexpr UINT ParticleBufferCount = 2;
+	static constexpr UINT MaxParticles = 4096;
+	static constexpr UINT ParticleThreadGroupSize = 256;
+	std::array<ComPtr<ID3D12Resource>, ParticleBufferCount> m_particleBuffers;
+	std::array<ComPtr<ID3D12Resource>, ParticleBufferCount> m_particleCounters;
+	std::array<D3D12_RESOURCE_STATES, ParticleBufferCount> m_particleBufferStates = {
+		D3D12_RESOURCE_STATE_COMMON,
+		D3D12_RESOURCE_STATE_COMMON
+	};
+	std::array<D3D12_RESOURCE_STATES, ParticleBufferCount> m_particleCounterStates = {
+		D3D12_RESOURCE_STATE_COMMON,
+		D3D12_RESOURCE_STATE_COMMON
+	};
+	ComPtr<ID3D12Resource> m_particleCounterResetUpload;
+	ComPtr<ID3D12Resource> m_particleCounterInitialUpload;
+	ComPtr<ID3D12Resource> m_particleDrawArgs;
+	ComPtr<ID3D12Resource> m_particleDrawArgsUpload;
+	ComPtr<ID3D12Resource> m_particleSortBuffer;
+	ComPtr<ID3D12CommandSignature> m_particleDrawCommandSignature;
+	D3D12_RESOURCE_STATES m_particleDrawArgsState = D3D12_RESOURCE_STATE_COMMON;
+	D3D12_RESOURCE_STATES m_particleSortBufferState = D3D12_RESOURCE_STATE_COMMON;
+	UINT m_particleReadBufferIndex = 0;
 
 	void InitDxgi();
 	void PickAdapter();
@@ -145,6 +173,16 @@ private:
 	void BuildSceneGeometryUpload();
 	void BuildObjVB_Upload();
 	void BuildSceneLights();
+	void BuildParticleSystem();
+	void BuildParticleDescriptors();
+	void UpdateParticleSimConstants(double dt);
+	void SimulateParticles();
+	void SortParticlesOnGpu();
+	void DrawTransparentParticles();
+	void TransitionParticleResource(
+		ID3D12Resource* resource,
+		D3D12_RESOURCE_STATES& currentState,
+		D3D12_RESOURCE_STATES targetState);
 	void InitializeSceneDefinitions();
 	void LoadScene(size_t sceneIndex, bool resetCamera);
 	void ResetCameraForCurrentScene();

@@ -108,8 +108,27 @@ struct alignas(16) DeferredPassConstants {
 	std::uint32_t DebugViewEnabled = 0;
 };
 
+struct alignas(16) GpuParticle {
+	DirectX::XMFLOAT4 PositionAge = { 0.0f, 0.0f, 0.0f, 0.0f };       // xyz = position, w = age
+	DirectX::XMFLOAT4 VelocityLifetime = { 0.0f, 0.0f, 0.0f, 1.0f };  // xyz = velocity, w = lifetime
+	DirectX::XMFLOAT4 ColorAlpha = { 0.62f, 0.78f, 1.0f, 0.28f };
+	DirectX::XMFLOAT4 SizeSeed = { 0.004f, 0.075f, 0.0f, 0.0f };      // x = half-width, y = half-length, zw = random seed
+};
+
+struct alignas(16) ParticleSimConstants {
+	float DeltaTime = 0.0f;
+	float TotalTime = 0.0f;
+	std::uint32_t MaxParticles = 0;
+	std::uint32_t _pad0 = 0;
+	DirectX::XMFLOAT4 RainArea = { 5.0f, 4.0f, 5.0f, -1.0f };        // xz = half-extents, y = spawn height, w = floor
+	DirectX::XMFLOAT4 RainCenter = { 0.0f, 0.0f, 0.0f, 0.0f };
+	DirectX::XMFLOAT4 Acceleration = { 0.0f, -0.10f, 0.0f, 0.0f };
+};
+
 static_assert(sizeof(ObjectConstants) % 16 == 0, "ObjectConstants must be 16-byte aligned sized.");
 static_assert(sizeof(PassConstants) % 16 == 0, "PassConstants must be 16-byte aligned sized.");
 static_assert(sizeof(MaterialConstants) % 16 == 0, "MaterialConstants must be 16-byte aligned sized.");
 static_assert(sizeof(DeferredPassConstants) % 16 == 0, "DeferredPassConstants must be 16-byte aligned sized.");
+static_assert(sizeof(GpuParticle) % 16 == 0, "GpuParticle must be 16-byte aligned sized.");
+static_assert(sizeof(ParticleSimConstants) % 16 == 0, "ParticleSimConstants must be 16-byte aligned sized.");
 #endif // !RENDER_STRUCTS_HPP

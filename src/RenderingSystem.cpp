@@ -61,6 +61,13 @@ void RenderingSystem::BuildShaders()
 
 	m_lightingVsByteCode = CompileShader(L"shader\\DeferredLighting.hlsl", nullptr, "VSFullscreen", "vs_5_1");
 	m_lightingPsByteCode = CompileShader(L"shader\\DeferredLighting.hlsl", nullptr, "PSLighting", "ps_5_1");
+
+	m_particleVsByteCode = CompileShader(L"shader\\Particles.hlsl", nullptr, "VSParticle", "vs_5_1");
+	m_particleGsByteCode = CompileShader(L"shader\\Particles.hlsl", nullptr, "GSBillboard", "gs_5_1");
+	m_particlePsByteCode = CompileShader(L"shader\\Particles.hlsl", nullptr, "PSRainParticle", "ps_5_1");
+	m_particleCsByteCode = CompileShader(L"shader\\Particles.hlsl", nullptr, "CSUpdateParticles", "cs_5_1");
+	m_particleSortInitCsByteCode = CompileShader(L"shader\\Particles.hlsl", nullptr, "CSInitParticleSort", "cs_5_1");
+	m_particleSortStepCsByteCode = CompileShader(L"shader\\Particles.hlsl", nullptr, "CSBitonicSort", "cs_5_1");
 }
 
 void RenderingSystem::BuildRootSignatures(ID3D12Device* device)
@@ -179,6 +186,113 @@ void RenderingSystem::BuildRootSignatures(ID3D12Device* device)
 			D3D12_ROOT_SIGNATURE_FLAG_DENY_GEOMETRY_SHADER_ROOT_ACCESS;
 
 		m_lightingRootSignature = CreateRootSignature(device, rootSigDesc);
+	}
+
+	{
+		D3D12_DESCRIPTOR_RANGE particleSrvRange = {};
+		particleSrvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+		particleSrvRange.NumDescriptors = 2;
+		particleSrvRange.BaseShaderRegister = 0;
+		particleSrvRange.RegisterSpace = 0;
+		particleSrvRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+		D3D12_ROOT_PARAMETER rootParams[2] = {};
+
+		rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+		rootParams[0].Descriptor.ShaderRegister = 1;
+		rootParams[0].Descriptor.RegisterSpace = 0;
+		rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+		rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+		rootParams[1].DescriptorTable.NumDescriptorRanges = 1;
+		rootParams[1].DescriptorTable.pDescriptorRanges = &particleSrvRange;
+		rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+
+		D3D12_ROOT_SIGNATURE_DESC rootSigDesc = {};
+		rootSigDesc.NumParameters = _countof(rootParams);
+		rootSigDesc.pParameters = rootParams;
+		rootSigDesc.NumStaticSamplers = 0;
+		rootSigDesc.pStaticSamplers = nullptr;
+		rootSigDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+
+		m_particleGraphicsRootSignature = CreateRootSignature(device, rootSigDesc);
+	}
+
+	{
+		D3D12_DESCRIPTOR_RANGE consumeRange = {};
+		consumeRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+		consumeRange.NumDescriptors = 1;
+		consumeRange.BaseShaderRegister = 0;
+		consumeRange.RegisterSpace = 0;
+		consumeRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+		D3D12_DESCRIPTOR_RANGE appendRange = {};
+		appendRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+		appendRange.NumDescriptors = 1;
+		appendRange.BaseShaderRegister = 1;
+		appendRange.RegisterSpace = 0;
+		appendRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+		D3D12_DESCRIPTOR_RANGE particleSrvRange = {};
+		particleSrvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+		particleSrvRange.NumDescriptors = 1;
+		particleSrvRange.BaseShaderRegister = 0;
+		particleSrvRange.RegisterSpace = 0;
+		particleSrvRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+		D3D12_DESCRIPTOR_RANGE sortUavRange = {};
+		sortUavRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+		sortUavRange.NumDescriptors = 1;
+		sortUavRange.BaseShaderRegister = 2;
+		sortUavRange.RegisterSpace = 0;
+		sortUavRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+		D3D12_ROOT_PARAMETER rootParams[7] = {};
+
+		rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+		rootParams[0].Descriptor.ShaderRegister = 0;
+		rootParams[0].Descriptor.RegisterSpace = 0;
+		rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+		rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+		rootParams[1].DescriptorTable.NumDescriptorRanges = 1;
+		rootParams[1].DescriptorTable.pDescriptorRanges = &consumeRange;
+		rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+		rootParams[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+		rootParams[2].DescriptorTable.NumDescriptorRanges = 1;
+		rootParams[2].DescriptorTable.pDescriptorRanges = &appendRange;
+		rootParams[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+		rootParams[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+		rootParams[3].Descriptor.ShaderRegister = 1;
+		rootParams[3].Descriptor.RegisterSpace = 0;
+		rootParams[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+		rootParams[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+		rootParams[4].DescriptorTable.NumDescriptorRanges = 1;
+		rootParams[4].DescriptorTable.pDescriptorRanges = &particleSrvRange;
+		rootParams[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+		rootParams[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+		rootParams[5].DescriptorTable.NumDescriptorRanges = 1;
+		rootParams[5].DescriptorTable.pDescriptorRanges = &sortUavRange;
+		rootParams[5].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+		rootParams[6].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+		rootParams[6].Constants.ShaderRegister = 2;
+		rootParams[6].Constants.RegisterSpace = 0;
+		rootParams[6].Constants.Num32BitValues = 2;
+		rootParams[6].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+		D3D12_ROOT_SIGNATURE_DESC rootSigDesc = {};
+		rootSigDesc.NumParameters = _countof(rootParams);
+		rootSigDesc.pParameters = rootParams;
+		rootSigDesc.NumStaticSamplers = 0;
+		rootSigDesc.pStaticSamplers = nullptr;
+		rootSigDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+		m_particleComputeRootSignature = CreateRootSignature(device, rootSigDesc);
 	}
 }
 
@@ -439,5 +553,90 @@ void RenderingSystem::BuildPSOs(ID3D12Device* device, DXGI_FORMAT backBufferForm
 		psoDesc.SampleDesc.Quality = 0;
 
 		ThrowIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&m_lightingPso)));
+	}
+
+	{
+		D3D12_BLEND_DESC blendDesc = {};
+		blendDesc.AlphaToCoverageEnable = FALSE;
+		blendDesc.IndependentBlendEnable = FALSE;
+		{
+			D3D12_RENDER_TARGET_BLEND_DESC rt = {};
+			rt.BlendEnable = TRUE;
+			rt.LogicOpEnable = FALSE;
+			rt.SrcBlend = D3D12_BLEND_SRC_ALPHA;
+			rt.DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
+			rt.BlendOp = D3D12_BLEND_OP_ADD;
+			rt.SrcBlendAlpha = D3D12_BLEND_ONE;
+			rt.DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
+			rt.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+			rt.LogicOp = D3D12_LOGIC_OP_NOOP;
+			rt.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+			blendDesc.RenderTarget[0] = rt;
+		}
+
+		D3D12_DEPTH_STENCIL_DESC dsDesc = {};
+		dsDesc.DepthEnable = TRUE;
+		dsDesc.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+		dsDesc.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+		dsDesc.StencilEnable = FALSE;
+		dsDesc.StencilReadMask = D3D12_DEFAULT_STENCIL_READ_MASK;
+		dsDesc.StencilWriteMask = D3D12_DEFAULT_STENCIL_WRITE_MASK;
+		dsDesc.FrontFace.StencilFailOp = D3D12_STENCIL_OP_KEEP;
+		dsDesc.FrontFace.StencilDepthFailOp = D3D12_STENCIL_OP_KEEP;
+		dsDesc.FrontFace.StencilPassOp = D3D12_STENCIL_OP_KEEP;
+		dsDesc.FrontFace.StencilFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+		dsDesc.BackFace = dsDesc.FrontFace;
+
+		D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
+		psoDesc.InputLayout = { nullptr, 0 };
+		psoDesc.pRootSignature = m_particleGraphicsRootSignature.Get();
+		psoDesc.VS = { m_particleVsByteCode->GetBufferPointer(), m_particleVsByteCode->GetBufferSize() };
+		psoDesc.GS = { m_particleGsByteCode->GetBufferPointer(), m_particleGsByteCode->GetBufferSize() };
+		psoDesc.PS = { m_particlePsByteCode->GetBufferPointer(), m_particlePsByteCode->GetBufferSize() };
+		psoDesc.RasterizerState = DefaultRasterizer(D3D12_CULL_MODE_NONE);
+		psoDesc.BlendState = blendDesc;
+		psoDesc.DepthStencilState = dsDesc;
+		psoDesc.SampleMask = D3D12_DEFAULT_SAMPLE_MASK;
+		psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_POINT;
+		psoDesc.NumRenderTargets = 1;
+		psoDesc.RTVFormats[0] = backBufferFormat;
+		psoDesc.DSVFormat = depthStencilFormat;
+		psoDesc.SampleDesc.Count = 1;
+		psoDesc.SampleDesc.Quality = 0;
+
+		ThrowIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&m_particleGraphicsPso)));
+	}
+
+	{
+		D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc = {};
+		psoDesc.pRootSignature = m_particleComputeRootSignature.Get();
+		psoDesc.CS = { m_particleCsByteCode->GetBufferPointer(), m_particleCsByteCode->GetBufferSize() };
+		psoDesc.NodeMask = 0;
+		psoDesc.CachedPSO = {};
+		psoDesc.Flags = D3D12_PIPELINE_STATE_FLAG_NONE;
+
+		ThrowIfFailed(device->CreateComputePipelineState(&psoDesc, IID_PPV_ARGS(&m_particleComputePso)));
+	}
+
+	{
+		D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc = {};
+		psoDesc.pRootSignature = m_particleComputeRootSignature.Get();
+		psoDesc.CS = { m_particleSortInitCsByteCode->GetBufferPointer(), m_particleSortInitCsByteCode->GetBufferSize() };
+		psoDesc.NodeMask = 0;
+		psoDesc.CachedPSO = {};
+		psoDesc.Flags = D3D12_PIPELINE_STATE_FLAG_NONE;
+
+		ThrowIfFailed(device->CreateComputePipelineState(&psoDesc, IID_PPV_ARGS(&m_particleSortInitPso)));
+	}
+
+	{
+		D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc = {};
+		psoDesc.pRootSignature = m_particleComputeRootSignature.Get();
+		psoDesc.CS = { m_particleSortStepCsByteCode->GetBufferPointer(), m_particleSortStepCsByteCode->GetBufferSize() };
+		psoDesc.NodeMask = 0;
+		psoDesc.CachedPSO = {};
+		psoDesc.Flags = D3D12_PIPELINE_STATE_FLAG_NONE;
+
+		ThrowIfFailed(device->CreateComputePipelineState(&psoDesc, IID_PPV_ARGS(&m_particleSortStepPso)));
 	}
 }
