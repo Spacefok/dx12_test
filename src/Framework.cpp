@@ -837,6 +837,51 @@ DirectX::XMFLOAT3 AabbExtents(const Framework::Aabb& bounds)
 	};
 }
 
+float AabbFootprintArea(const Framework::Aabb& bounds)
+{
+	if (!IsAabbValid(bounds)) {
+		return 0.0f;
+	}
+
+	const float width = (std::max)(bounds.Max.x - bounds.Min.x, 0.0f);
+	const float depth = (std::max)(bounds.Max.z - bounds.Min.z, 0.0f);
+	return width * depth;
+}
+
+bool TrySelectRainCollisionBounds(
+	const std::vector<Framework::SceneObject>& sceneObjects,
+	Framework::Aabb& outBounds)
+{
+	for (const Framework::SceneObject& sceneObject : sceneObjects)
+	{
+		if (sceneObject.Geometry == Framework::SceneObjectGeometry::SceneModel &&
+			IsAabbValid(sceneObject.Bounds))
+		{
+			outBounds = sceneObject.Bounds;
+			return true;
+		}
+	}
+
+	float bestFootprintArea = 0.0f;
+	bool foundBounds = false;
+	for (const Framework::SceneObject& sceneObject : sceneObjects)
+	{
+		if (!IsAabbValid(sceneObject.Bounds)) {
+			continue;
+		}
+
+		const float footprintArea = AabbFootprintArea(sceneObject.Bounds);
+		if (footprintArea > bestFootprintArea)
+		{
+			bestFootprintArea = footprintArea;
+			outBounds = sceneObject.Bounds;
+			foundBounds = true;
+		}
+	}
+
+	return foundBounds;
+}
+
 Framework::Aabb MakeAabbFromCenterExtents(const DirectX::XMFLOAT3& center, const DirectX::XMFLOAT3& extents)
 {
 	return {
@@ -2709,6 +2754,28 @@ void Framework::UpdateParticleSimConstants(double dt)
 	{
 		sim.RainArea = { 2.0f, 2.0f, 2.0f, -1.0f };
 		sim.RainCenter = { 0.0f, 0.0f, 0.0f, 0.0f };
+	}
+
+	Aabb collisionBounds = {};
+	if (TrySelectRainCollisionBounds(m_sceneObjects, collisionBounds))
+	{
+		sim.CollisionBoundsMin = {
+			collisionBounds.Min.x,
+			collisionBounds.Min.y,
+			collisionBounds.Min.z,
+			1.0f
+		};
+		sim.CollisionBoundsMax = {
+			collisionBounds.Max.x,
+			collisionBounds.Max.y,
+			collisionBounds.Max.z,
+			0.035f
+		};
+	}
+	else
+	{
+		sim.CollisionBoundsMin = { 0.0f, 0.0f, 0.0f, 0.0f };
+		sim.CollisionBoundsMax = { 0.0f, 0.0f, 0.0f, 0.035f };
 	}
 
 	m_particleSimCB->CopyData(0, sim);

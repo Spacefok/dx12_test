@@ -123,6 +123,8 @@ struct alignas(16) ParticleSimConstants {
 	DirectX::XMFLOAT4 RainArea = { 5.0f, 4.0f, 5.0f, -1.0f };        // xz = half-extents, y = spawn height, w = floor
 	DirectX::XMFLOAT4 RainCenter = { 0.0f, 0.0f, 0.0f, 0.0f };
 	DirectX::XMFLOAT4 Acceleration = { 0.0f, -0.10f, 0.0f, 0.0f };
+	DirectX::XMFLOAT4 CollisionBoundsMin = { 0.0f, 0.0f, 0.0f, 0.0f }; // xyz = footprint min/floor, w = enabled
+	DirectX::XMFLOAT4 CollisionBoundsMax = { 0.0f, 0.0f, 0.0f, 0.035f }; // xyz = footprint max, w = bounce scale
 };
 
 static_assert(sizeof(ObjectConstants) % 16 == 0, "ObjectConstants must be 16-byte aligned sized.");
