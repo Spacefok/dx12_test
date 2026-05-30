@@ -415,6 +415,7 @@ private:
 	size_t m_currentSceneIndex = 0;
 	std::array<bool, 256> m_keyDown{}; // состояние VK_*
 	bool m_showBufferDebug = false;
+	bool m_enableLocalLights = false;
 	float m_tessellationMinDistance = 0.75f;
 	float m_tessellationMaxDistance = 3.0f;
 	float m_tessellationMinFactor = 1.0f;

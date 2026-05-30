@@ -1452,6 +1452,11 @@ LRESULT Framework::MsgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 				m_enableOcclusionCulling = !m_enableOcclusionCulling;
 				UpdateWindowTitle();
 			}
+			else if (vk == VK_F5)
+			{
+				m_enableLocalLights = !m_enableLocalLights;
+				UpdateWindowTitle();
+			}
 			else if (vk >= '1' && vk <= '9')
 			{
 				const size_t sceneIndex = static_cast<size_t>(vk - '1');
@@ -1730,8 +1735,8 @@ void Framework::Update(const double& dt)
 	};
 
 	const UINT dirCount = std::min<UINT>(m_directionalLightCount, MaxDirectionalLights);
-	const UINT pointCount = std::min<UINT>(m_pointLightCount, MaxPointLights);
-	const UINT spotCount = std::min<UINT>(m_spotLightCount, MaxSpotLights);
+	const UINT pointCount = m_enableLocalLights ? std::min<UINT>(m_pointLightCount, MaxPointLights) : 0u;
+	const UINT spotCount = m_enableLocalLights ? std::min<UINT>(m_spotLightCount, MaxSpotLights) : 0u;     
 
 	deferred.DirectionalLightCount = dirCount;
 	deferred.PointLightCount = pointCount;
@@ -3996,13 +4001,15 @@ void Framework::UpdateWindowTitle() const
 		title += m_sceneDefinitions[m_currentSceneIndex].Name;
 		title += L" | 1-";
 		title += std::to_wstring(m_sceneDefinitions.size());
-		title += L" switch | F1 debug | F2 frustum | F3 octree | F4 occlusion";
+		title += L" switch | F1 debug | F2 frustum | F3 octree | F4 occlusion | F5 local lights";
 	}
 
 	title += L" | Cull: ";
 	title += CullingModeLabel(m_enableFrustumCulling, m_useOctreeForCulling);
 	title += L" | Occlusion: ";
 	title += m_enableOcclusionCulling ? L"On" : L"Off";
+	title += L" | LocalLights: ";
+	title += m_enableLocalLights ? L"On" : L"Off";
 	title += L" | Submitted: ";
 	title += std::to_wstring(m_visibleObjectCount);
 	title += L"/";

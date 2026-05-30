@@ -528,18 +528,18 @@ float3 ApplyLabelOverlay(float3 panelColor, uint labelId, float2 panelUv)
 
 float3 CascadeDebugColor(uint cascadeIndex)
 {
-    float3 color = float3(1.00f, 0.26f, 0.22f);
+    float3 color = float3(1.00f, 1.00f, 1.00f);
     if (cascadeIndex == 0u)
     {
-        color = float3(0.18f, 0.72f, 1.00f);
+        color = float3(1.00f, 0.05f, 0.04f);
     }
     else if (cascadeIndex == 1u)
     {
-        color = float3(0.22f, 1.00f, 0.44f);
+        color = float3(0.08f, 0.25f, 1.00f);
     }
     else if (cascadeIndex == 2u)
     {
-        color = float3(1.00f, 0.82f, 0.20f);
+        color = float3(0.08f, 0.90f, 0.18f);
     }
 
     return color;
