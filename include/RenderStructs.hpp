@@ -79,6 +79,7 @@ struct alignas(16) MaterialConstants {
 constexpr std::uint32_t MaxDirectionalLights = 4;
 constexpr std::uint32_t MaxPointLights = 32;
 constexpr std::uint32_t MaxSpotLights = 16;
+constexpr std::uint32_t ShadowCascadeCount = 4;
 
 struct alignas(16) GpuDirectionalLight {
 	DirectX::XMFLOAT4 DirectionIntensity = { 0.0f, -1.0f, 0.0f, 0.0f }; // xyz = direction, w = intensity
@@ -102,6 +103,10 @@ struct alignas(16) DeferredPassConstants {
 	float AmbientIntensity = 0.2f;
 	DirectX::XMFLOAT4 AmbientColor = { 1.0f, 1.0f, 1.0f, 1.0f };
 	DirectX::XMFLOAT4X4 InvViewProj = dx::Identity4x4();
+	DirectX::XMFLOAT4X4 View = dx::Identity4x4();
+	std::array<DirectX::XMFLOAT4X4, ShadowCascadeCount> ShadowViewProj = {};
+	DirectX::XMFLOAT4 ShadowCascadeSplits = { 0.0f, 0.0f, 0.0f, 0.0f };
+	DirectX::XMFLOAT4 ShadowParams = { 0.0f, 0.0f, 0.0f, 0.0f }; // x=texel size, y=enabled, z=receiver depth bias, w=cascade count
 	std::uint32_t DirectionalLightCount = 0;
 	std::uint32_t PointLightCount = 0;
 	std::uint32_t SpotLightCount = 0;

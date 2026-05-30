@@ -17,6 +17,10 @@ public:
 	ID3D12RootSignature* LightingRootSignature() const { return m_lightingRootSignature.Get(); }
 	ID3D12PipelineState* LightingPSO() const { return m_lightingPso.Get(); }
 
+	ID3D12RootSignature* ShadowRootSignature() const { return m_shadowRootSignature.Get(); }
+	ID3D12PipelineState* ShadowBasicPSO() const { return m_shadowBasicPso.Get(); }
+	ID3D12PipelineState* ShadowTessellationPSO() const { return m_shadowTessellationPso.Get(); }
+
 	ID3D12RootSignature* ParticleGraphicsRootSignature() const { return m_particleGraphicsRootSignature.Get(); }
 	ID3D12PipelineState* ParticleGraphicsPSO() const { return m_particleGraphicsPso.Get(); }
 	ID3D12RootSignature* ParticleComputeRootSignature() const { return m_particleComputeRootSignature.Get(); }
@@ -33,6 +37,11 @@ private:
 	ComPtr<ID3DBlob> m_forwardTransparentPsByteCode;
 	ComPtr<ID3DBlob> m_lightingVsByteCode;
 	ComPtr<ID3DBlob> m_lightingPsByteCode;
+	ComPtr<ID3DBlob> m_shadowBasicVsByteCode;
+	ComPtr<ID3DBlob> m_shadowControlPointVsByteCode;
+	ComPtr<ID3DBlob> m_shadowHsByteCode;
+	ComPtr<ID3DBlob> m_shadowDsByteCode;
+	ComPtr<ID3DBlob> m_shadowPsByteCode;
 	ComPtr<ID3DBlob> m_particleVsByteCode;
 	ComPtr<ID3DBlob> m_particleGsByteCode;
 	ComPtr<ID3DBlob> m_particlePsByteCode;
@@ -42,6 +51,7 @@ private:
 
 	ComPtr<ID3D12RootSignature> m_geometryRootSignature;
 	ComPtr<ID3D12RootSignature> m_lightingRootSignature;
+	ComPtr<ID3D12RootSignature> m_shadowRootSignature;
 	ComPtr<ID3D12RootSignature> m_particleGraphicsRootSignature;
 	ComPtr<ID3D12RootSignature> m_particleComputeRootSignature;
 
@@ -49,6 +59,8 @@ private:
 	ComPtr<ID3D12PipelineState> m_geometryTessellationPso;
 	ComPtr<ID3D12PipelineState> m_forwardTransparentPso;
 	ComPtr<ID3D12PipelineState> m_lightingPso;
+	ComPtr<ID3D12PipelineState> m_shadowBasicPso;
+	ComPtr<ID3D12PipelineState> m_shadowTessellationPso;
 	ComPtr<ID3D12PipelineState> m_particleGraphicsPso;
 	ComPtr<ID3D12PipelineState> m_particleComputePso;
 	ComPtr<ID3D12PipelineState> m_particleSortInitPso;

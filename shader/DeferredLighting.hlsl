@@ -24,6 +24,10 @@ cbuffer DeferredPassCB : register(b0)
     float gAmbientIntensity;
     float4 gAmbientColor;
     float4x4 gInvViewProj;
+    float4x4 gView;
+    float4x4 gShadowViewProj[4];
+    float4 gShadowCascadeSplits;
+    float4 gShadowParams; // x=texel size, y=enabled, z=receiver depth bias, w=cascade count
     uint gDirectionalLightCount;
     uint gPointLightCount;
     uint gSpotLightCount;
@@ -37,7 +41,9 @@ Texture2D<float> gDepthTex : register(t3);
 StructuredBuffer<DirectionalLight> gDirectionalLights : register(t4);
 StructuredBuffer<PointLight> gPointLights : register(t5);
 StructuredBuffer<SpotLight> gSpotLights : register(t6);
+Texture2DArray<float> gShadowMap : register(t7);
 SamplerState gSamPointClamp : register(s0);
+SamplerComparisonState gSamShadowCmp : register(s1);
 
 struct FullscreenOut
 {
@@ -173,6 +179,80 @@ float3 NormalizeNormalForLighting(float3 normalW)
     return normalized;
 }
 
+uint SelectShadowCascade(float viewDepth)
+{
+    uint cascadeIndex = 0u;
+    if (viewDepth > gShadowCascadeSplits.x) cascadeIndex = 1u;
+    if (viewDepth > gShadowCascadeSplits.y) cascadeIndex = 2u;
+    if (viewDepth > gShadowCascadeSplits.z) cascadeIndex = 3u;
+    return cascadeIndex;
+}
+
+float SampleShadowPcf(float3 uvw, float receiverDepth)
+{
+    float visibility = 0.0f;
+
+    [unroll]
+    for (int y = -1; y <= 1; ++y)
+    {
+        [unroll]
+        for (int x = -1; x <= 1; ++x)
+        {
+            visibility += gShadowMap.SampleCmpLevelZero(
+                gSamShadowCmp,
+                uvw,
+                receiverDepth,
+                int2(x, y));
+        }
+    }
+
+    return visibility / 9.0f;
+}
+
+float ComputeDirectionalShadow(float3 posW)
+{
+    float visibility = 1.0f;
+
+    if (gShadowParams.y >= 0.5f)
+    {
+        float viewDepth = mul(float4(posW, 1.0f), gView).z;
+        if (viewDepth > 0.0f && viewDepth <= gShadowCascadeSplits.w)
+        {
+            uint cascadeIndex = SelectShadowCascade(viewDepth);
+            float4 worldPos = float4(posW, 1.0f);
+            float4 shadowPos = mul(worldPos, gShadowViewProj[0]);
+            if (cascadeIndex == 1u)
+            {
+                shadowPos = mul(worldPos, gShadowViewProj[1]);
+            }
+            else if (cascadeIndex == 2u)
+            {
+                shadowPos = mul(worldPos, gShadowViewProj[2]);
+            }
+            else if (cascadeIndex == 3u)
+            {
+                shadowPos = mul(worldPos, gShadowViewProj[3]);
+            }
+
+            if (abs(shadowPos.w) > 1e-6f)
+            {
+                shadowPos.xyz /= shadowPos.w;
+                float2 shadowUv = float2(shadowPos.x * 0.5f + 0.5f, 0.5f - shadowPos.y * 0.5f);
+
+                if (shadowUv.x >= 0.0f && shadowUv.x <= 1.0f &&
+                    shadowUv.y >= 0.0f && shadowUv.y <= 1.0f &&
+                    shadowPos.z >= 0.0f && shadowPos.z <= 1.0f)
+                {
+                    float receiverDepth = saturate(shadowPos.z - gShadowParams.z);
+                    visibility = SampleShadowPcf(float3(shadowUv, (float)cascadeIndex), receiverDepth);
+                }
+            }
+        }
+    }
+
+    return visibility;
+}
+
 float3 EvaluateSceneLighting(float3 albedo, float3 normalW, float3 posW, float specPower)
 {
     float3 viewVec = gEyePosW - posW;
@@ -184,7 +264,8 @@ float3 EvaluateSceneLighting(float3 albedo, float3 normalW, float3 posW, float s
     [loop]
     for (uint dirIndex = 0; dirIndex < gDirectionalLightCount; ++dirIndex)
     {
-        color += EvaluateDirectional(gDirectionalLights[dirIndex], albedo, normalW, viewDir, specPower);
+        float shadowVisibility = (dirIndex == 0u) ? ComputeDirectionalShadow(posW) : 1.0f;
+        color += shadowVisibility * EvaluateDirectional(gDirectionalLights[dirIndex], albedo, normalW, viewDir, specPower);
     }
 
     [loop]
@@ -297,6 +378,8 @@ static const uint LABEL_POSITION = 4u;
 static const uint LABEL_DISP = 5u;
 static const uint LABEL_TESS = 6u;
 static const uint LABEL_LIT = 7u;
+static const uint LABEL_CSM = 8u;
+static const uint LABEL_MAP = 9u;
 
 uint GlyphRowBits(uint glyph, uint row)
 {
@@ -421,6 +504,12 @@ float PanelLabelMask(uint labelId, float2 panelUv)
     else if (labelId == LABEL_TESS) {
         mask = DrawWord(panelUv, GLYPH_T, GLYPH_E, GLYPH_S, GLYPH_S, GLYPH_A, GLYPH_A, GLYPH_A, GLYPH_A, 4u);
     }
+    else if (labelId == LABEL_CSM) {
+        mask = DrawWord(panelUv, GLYPH_C, GLYPH_S, GLYPH_M, GLYPH_A, GLYPH_A, GLYPH_A, GLYPH_A, GLYPH_A, 3u);
+    }
+    else if (labelId == LABEL_MAP) {
+        mask = DrawWord(panelUv, GLYPH_M, GLYPH_A, GLYPH_P, GLYPH_A, GLYPH_A, GLYPH_A, GLYPH_A, GLYPH_A, 3u);
+    }
     else {
         mask = DrawWord(panelUv, GLYPH_L, GLYPH_I, GLYPH_T, GLYPH_A, GLYPH_A, GLYPH_A, GLYPH_A, GLYPH_A, 3u);
     }
@@ -435,6 +524,66 @@ float3 ApplyLabelOverlay(float3 panelColor, uint labelId, float2 panelUv)
     panelColor = lerp(panelColor, float3(0.0f, 0.0f, 0.0f), saturate(shadow));
     panelColor = lerp(panelColor, float3(1.0f, 1.0f, 0.0f), saturate(text));
     return panelColor;
+}
+
+float3 CascadeDebugColor(uint cascadeIndex)
+{
+    float3 color = float3(1.00f, 0.26f, 0.22f);
+    if (cascadeIndex == 0u)
+    {
+        color = float3(0.18f, 0.72f, 1.00f);
+    }
+    else if (cascadeIndex == 1u)
+    {
+        color = float3(0.22f, 1.00f, 0.44f);
+    }
+    else if (cascadeIndex == 2u)
+    {
+        color = float3(1.00f, 0.82f, 0.20f);
+    }
+
+    return color;
+}
+
+float3 VisualizeShadowStatus(float3 posW)
+{
+    float3 result = float3(0.10f, 0.10f, 0.10f);
+    if (gShadowParams.y >= 0.5f)
+    {
+        float viewDepth = mul(float4(posW, 1.0f), gView).z;
+        result = float3(0.03f, 0.03f, 0.03f);
+
+        if (viewDepth > 0.0f && viewDepth <= gShadowCascadeSplits.w)
+        {
+            uint cascadeIndex = SelectShadowCascade(viewDepth);
+            float visibility = ComputeDirectionalShadow(posW);
+            float3 cascadeColor = CascadeDebugColor(cascadeIndex);
+
+            result = lerp(float3(0.02f, 0.02f, 0.025f), cascadeColor, visibility);
+        }
+    }
+
+    return result;
+}
+
+float3 VisualizeShadowMapArray(float2 panelUv)
+{
+    float3 result = float3(0.10f, 0.10f, 0.10f);
+    if (gShadowParams.y >= 0.5f)
+    {
+        float2 quadrant = floor(saturate(panelUv) * 2.0f);
+        uint cascadeIndex = (uint)quadrant.x + (uint)quadrant.y * 2u;
+        float2 localUv = frac(panelUv * 2.0f);
+        float shadowDepth = gShadowMap.SampleLevel(gSamPointClamp, float3(localUv, (float)cascadeIndex), 0.0f);
+        float depthContrast = saturate((1.0f - shadowDepth) * 12.0f);
+        float3 panel = lerp(float3(0.015f, 0.015f, 0.018f), CascadeDebugColor(cascadeIndex), depthContrast);
+
+        float2 gridLine = abs(frac(panelUv * 2.0f) - 0.5f);
+        float separator = step(0.492f, max(gridLine.x, gridLine.y));
+        result = lerp(panel, float3(0.92f, 0.92f, 0.82f), separator * 0.45f);
+    }
+
+    return result;
 }
 
 float3 SampleDebugPanel(uint tileX, uint tileY, float2 panelUv, out uint labelId)
@@ -458,7 +607,8 @@ float3 SampleDebugPanel(uint tileX, uint tileY, float2 panelUv, out uint labelId
     else if (tileY == 0u && tileX == 1u) { panel = VisualizeNormal(normalW); labelId = LABEL_NORMAL; }
     else if (tileY == 0u && tileX == 2u) { panel = saturate(specPower / 128.0f).xxx; labelId = LABEL_SPEC; }
     else if (tileY == 1u && tileX == 0u) { panel = depth.xxx; labelId = LABEL_DEPTH; }
-    else if (tileY == 1u && tileX == 2u) { panel = VisualizePosition(posW); labelId = LABEL_POSITION; }
+    else if (tileY == 1u && tileX == 1u) { panel = VisualizeShadowStatus(posW); labelId = LABEL_CSM; }
+    else if (tileY == 1u && tileX == 2u) { panel = VisualizeShadowMapArray(panelUv); labelId = LABEL_MAP; }
     else if (tileY == 2u && tileX == 0u) { panel = VisualizeDisplacement(debugDisplacement); labelId = LABEL_DISP; }
     else if (tileY == 2u && tileX == 1u) { panel = VisualizeTessFactor(debugTessFactor); labelId = LABEL_TESS; }
     else if (tileY == 2u && tileX == 2u) { panel = litColor; labelId = LABEL_LIT; }
@@ -484,14 +634,11 @@ float4 PSLighting(FullscreenOut pin) : SV_Target
         uint tileX = (uint)min(floor(tileCoord.x), 2.0f);
         uint tileY = (uint)min(floor(tileCoord.y), 2.0f);
 
-        if (tileX != 1u || tileY != 1u)
-        {
-            float2 panelUv = frac(tileCoord);
-            uint labelId = LABEL_DEPTH;
-            float3 panelColor = SampleDebugPanel(tileX, tileY, panelUv, labelId);
-            panelColor = ApplyLabelOverlay(panelColor, labelId, panelUv);
-            return float4(panelColor, 1.0f);
-        }
+        float2 panelUv = frac(tileCoord);
+        uint labelId = LABEL_DEPTH;
+        float3 panelColor = SampleDebugPanel(tileX, tileY, panelUv, labelId);
+        panelColor = ApplyLabelOverlay(panelColor, labelId, panelUv);
+        return float4(panelColor, 1.0f);
     }
 
     return float4(color, 1.0f);

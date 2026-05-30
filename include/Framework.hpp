@@ -82,6 +82,11 @@ private:
 	int m_currBackBuffer = 0;
 
 	DXGI_FORMAT m_backBufferFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+	static constexpr float CameraFovY = 0.7853981633974483f;
+	static constexpr float CameraNearZ = 0.1f;
+	static constexpr float CameraFarZ = 1000.0f;
+	static constexpr UINT ShadowMapSize = 2048;
+	static constexpr float ShadowCascadeLambda = 0.72f;
 
 	ComPtr<ID3D12DescriptorHeap> m_rtvHeap;
 	ComPtr<ID3D12DescriptorHeap> m_dsvHeap;
@@ -92,12 +97,18 @@ private:
 
 	ComPtr<ID3D12Resource> m_swapChainBuffer[SwapChainBufferCount];
 	ComPtr<ID3D12Resource> m_depthStencilBuffer;
+	ComPtr<ID3D12Resource> m_shadowMap;
 
 	DXGI_FORMAT m_depthStencilFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;
 	DXGI_FORMAT m_depthStencilResourceFormat = DXGI_FORMAT_R24G8_TYPELESS;
 	DXGI_FORMAT m_depthStencilSrvFormat = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
+	DXGI_FORMAT m_shadowMapResourceFormat = DXGI_FORMAT_R32_TYPELESS;
+	DXGI_FORMAT m_shadowMapDsvFormat = DXGI_FORMAT_D32_FLOAT;
+	DXGI_FORMAT m_shadowMapSrvFormat = DXGI_FORMAT_R32_FLOAT;
 	D3D12_VIEWPORT m_screenViewport = {};
+	D3D12_VIEWPORT m_shadowViewport = {};
 	D3D12_RECT m_scissorRect = {};
+	D3D12_RECT m_shadowScissorRect = {};
 
 	Gbuffer m_gbuffer;
 	RenderingSystem m_renderingSystem;
@@ -105,6 +116,7 @@ private:
 	std::unique_ptr<UploadBuffer<ObjectConstants>> m_objectCB;
 	std::unique_ptr<UploadBuffer<PassConstants>>   m_passCB;
 	std::unique_ptr<UploadBuffer<DeferredPassConstants>> m_deferredPassCB;
+	std::unique_ptr<UploadBuffer<PassConstants>> m_shadowPassCB;
 	std::unique_ptr<UploadBuffer<GpuDirectionalLight>> m_directionalLightSB;
 	std::unique_ptr<UploadBuffer<GpuPointLight>> m_pointLightSB;
 	std::unique_ptr<UploadBuffer<GpuSpotLight>> m_spotLightSB;
@@ -120,6 +132,7 @@ private:
 	UINT m_directionalLightSrvIndex = 0;
 	UINT m_pointLightSrvIndex = 0;
 	UINT m_spotLightSrvIndex = 0;
+	UINT m_shadowSrvIndex = 0;
 	UINT m_particleUavBaseIndex = 0;
 	UINT m_particleSrvBaseIndex = 0;
 	UINT m_particleSortUavIndex = 0;
@@ -128,6 +141,8 @@ private:
 	std::array<GpuDirectionalLight, MaxDirectionalLights> m_directionalLights{};
 	std::array<GpuPointLight, MaxPointLights> m_pointLights{};
 	std::array<GpuSpotLight, MaxSpotLights> m_spotLights{};
+	std::array<DirectX::XMFLOAT4X4, ShadowCascadeCount> m_shadowViewProj = {};
+	std::array<float, ShadowCascadeCount> m_shadowCascadeSplits = {};
 	UINT m_directionalLightCount = 0;
 	UINT m_pointLightCount = 0;
 	UINT m_spotLightCount = 0;
@@ -168,6 +183,9 @@ private:
 	void BuildConstantBuffers();
 	void BuildCbvHeap();
 	void BuildCbvViews();
+	void BuildShadowResources();
+	void UpdateCascadedShadowMaps(const DirectX::XMMATRIX& view);
+	void RenderSceneToShadowMap();
 	void BuildRootSignature();
 	void BuildPSO();
 	void BuildSceneGeometryUpload();
@@ -403,6 +421,12 @@ private:
 
 	D3D12_CPU_DESCRIPTOR_HANDLE DepthStencilView() const {
 		return m_dsvHeap->GetCPUDescriptorHandleForHeapStart();
+	}
+
+	D3D12_CPU_DESCRIPTOR_HANDLE ShadowCascadeDepthStencilView(UINT cascadeIndex) const {
+		D3D12_CPU_DESCRIPTOR_HANDLE h = m_dsvHeap->GetCPUDescriptorHandleForHeapStart();
+		h.ptr += static_cast<SIZE_T>(1u + cascadeIndex) * m_dsvDescriptorSize;
+		return h;
 	}
 
 	D3D12_CPU_DESCRIPTOR_HANDLE CbvSrvCpuHandle(UINT index) const {
