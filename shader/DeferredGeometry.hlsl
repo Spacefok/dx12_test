@@ -125,6 +125,11 @@ float3 BuildFallbackTangent(float3 normalW)
     return SafeNormalize(cross(helper, normalW), float3(1.0f, 0.0f, 0.0f));
 }
 
+float3 GammaToLinear(float3 color)
+{
+    return pow(saturate(color), float3(2.2f, 2.2f, 2.2f));
+}
+
 float2 ComputeMaterialUv(float2 baseTexC)
 {
     return baseTexC * gMatUvTilingOffset.xy * gUvTiling + gMatUvTilingOffset.zw + gUvScroll;
@@ -447,6 +452,7 @@ GBufferOut PSGBuffer(GeometryPSInput pin)
     if ((gMatFlags & MATERIAL_FLAG_HAS_BASE_COLOR_TEXTURE) != 0u)
     {
         baseColorSample = gBaseColorMap.Sample(gSamLinearWrap, pin.TexC);
+        baseColorSample.rgb = GammaToLinear(baseColorSample.rgb);
     }
 
     float alpha = pin.Color.a * gMatDiffuseAlbedo.a * baseColorSample.a;
@@ -489,6 +495,7 @@ float4 PSTransparent(GeometryPSInput pin) : SV_Target
     if ((gMatFlags & MATERIAL_FLAG_HAS_BASE_COLOR_TEXTURE) != 0u)
     {
         baseColorSample = gBaseColorMap.Sample(gSamLinearWrap, pin.TexC);
+        baseColorSample.rgb = GammaToLinear(baseColorSample.rgb);
     }
 
     float alpha = pin.Color.a * gMatDiffuseAlbedo.a * baseColorSample.a;

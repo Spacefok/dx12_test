@@ -87,9 +87,18 @@ private:
 	static constexpr float CameraFarZ = 1000.0f;
 	static constexpr UINT ShadowMapSize = 2048;
 	static constexpr float ShadowCascadeLambda = 0.72f;
+	static constexpr DXGI_FORMAT HdrRenderTargetFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
+	static constexpr UINT PostProcessTextureCount = 6;
+	static constexpr UINT PostProcessHdrScene = 0;
+	static constexpr UINT PostProcessBloomExtract = 1;
+	static constexpr UINT PostProcessBloomPing = 2;
+	static constexpr UINT PostProcessBloomPong = 3;
+	static constexpr UINT PostProcessSceneBlurPing = 4;
+	static constexpr UINT PostProcessSceneBlurPong = 5;
 
 	ComPtr<ID3D12DescriptorHeap> m_rtvHeap;
 	ComPtr<ID3D12DescriptorHeap> m_dsvHeap;
+	ComPtr<ID3D12DescriptorHeap> m_postProcessRtvHeap;
 
 	UINT m_rtvDescriptorSize = 0;
 	UINT m_dsvDescriptorSize = 0;
@@ -98,6 +107,17 @@ private:
 	ComPtr<ID3D12Resource> m_swapChainBuffer[SwapChainBufferCount];
 	ComPtr<ID3D12Resource> m_depthStencilBuffer;
 	ComPtr<ID3D12Resource> m_shadowMap;
+	std::array<ComPtr<ID3D12Resource>, PostProcessTextureCount> m_postProcessTextures;
+	std::array<D3D12_RESOURCE_STATES, PostProcessTextureCount> m_postProcessStates = {
+		D3D12_RESOURCE_STATE_COMMON,
+		D3D12_RESOURCE_STATE_COMMON,
+		D3D12_RESOURCE_STATE_COMMON,
+		D3D12_RESOURCE_STATE_COMMON,
+		D3D12_RESOURCE_STATE_COMMON,
+		D3D12_RESOURCE_STATE_COMMON
+	};
+	UINT m_postProcessWidth = 0;
+	UINT m_postProcessHeight = 0;
 
 	DXGI_FORMAT m_depthStencilFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;
 	DXGI_FORMAT m_depthStencilResourceFormat = DXGI_FORMAT_R24G8_TYPELESS;
@@ -116,6 +136,7 @@ private:
 	std::unique_ptr<UploadBuffer<ObjectConstants>> m_objectCB;
 	std::unique_ptr<UploadBuffer<PassConstants>>   m_passCB;
 	std::unique_ptr<UploadBuffer<DeferredPassConstants>> m_deferredPassCB;
+	std::unique_ptr<UploadBuffer<PostProcessConstants>> m_postProcessCB;
 	std::unique_ptr<UploadBuffer<PassConstants>> m_shadowPassCB;
 	std::unique_ptr<UploadBuffer<GpuDirectionalLight>> m_directionalLightSB;
 	std::unique_ptr<UploadBuffer<GpuPointLight>> m_pointLightSB;
@@ -137,6 +158,8 @@ private:
 	UINT m_particleSrvBaseIndex = 0;
 	UINT m_particleSortUavIndex = 0;
 	UINT m_particleSortSrvIndex = 0;
+	UINT m_postProcessSrvBaseIndex = 0;
+	UINT m_postProcessFinalSrvBaseIndex = 0;
 
 	std::array<GpuDirectionalLight, MaxDirectionalLights> m_directionalLights{};
 	std::array<GpuPointLight, MaxPointLights> m_pointLights{};
@@ -184,6 +207,16 @@ private:
 	void BuildCbvHeap();
 	void BuildCbvViews();
 	void BuildShadowResources();
+	void BuildPostProcessResources();
+	void CreatePostProcessSrvDescriptors();
+	void TransitionPostProcessTexture(UINT textureIndex, D3D12_RESOURCE_STATES targetState);
+	void DrawPostProcessPass(
+		ID3D12PipelineState* pso,
+		D3D12_CPU_DESCRIPTOR_HANDLE rtv,
+		UINT width,
+		UINT height,
+		D3D12_GPU_DESCRIPTOR_HANDLE sourceSrv);
+	void RunPostProcess();
 	void UpdateCascadedShadowMaps(const DirectX::XMMATRIX& view);
 	void RenderSceneToShadowMap();
 	void BuildRootSignature();
@@ -426,6 +459,12 @@ private:
 	D3D12_CPU_DESCRIPTOR_HANDLE ShadowCascadeDepthStencilView(UINT cascadeIndex) const {
 		D3D12_CPU_DESCRIPTOR_HANDLE h = m_dsvHeap->GetCPUDescriptorHandleForHeapStart();
 		h.ptr += static_cast<SIZE_T>(1u + cascadeIndex) * m_dsvDescriptorSize;
+		return h;
+	}
+
+	D3D12_CPU_DESCRIPTOR_HANDLE PostProcessRenderTargetView(UINT textureIndex) const {
+		D3D12_CPU_DESCRIPTOR_HANDLE h = m_postProcessRtvHeap->GetCPUDescriptorHandleForHeapStart();
+		h.ptr += static_cast<SIZE_T>(textureIndex) * m_rtvDescriptorSize;
 		return h;
 	}
 

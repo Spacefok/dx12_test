@@ -113,6 +113,25 @@ struct alignas(16) DeferredPassConstants {
 	std::uint32_t DebugViewEnabled = 0;
 };
 
+struct alignas(16) PostProcessConstants {
+	DirectX::XMFLOAT2 InvSceneSize = { 1.0f, 1.0f };
+	DirectX::XMFLOAT2 InvPostSize = { 1.0f, 1.0f };
+	float Exposure = 1.15f;
+	float BloomStrength = 0.55f;
+	float BloomThreshold = 1.05f;
+	float BloomKnee = 0.35f;
+	float FocusDistance = 4.0f;
+	float FocusRange = 2.0f;
+	float MaxDofBlur = 0.85f;
+	float Time = 0.0f;
+	float VignetteStrength = 0.22f;
+	float ChromaticAberration = 1.15f;
+	float GrainStrength = 0.010f;
+	float Gamma = 2.2f;
+	DirectX::XMFLOAT2 CameraNearFar = { 0.1f, 1000.0f };
+	DirectX::XMFLOAT2 _pad = { 0.0f, 0.0f };
+};
+
 struct alignas(16) GpuParticle {
 	DirectX::XMFLOAT4 PositionAge = { 0.0f, 0.0f, 0.0f, 0.0f };       // xyz = position, w = age
 	DirectX::XMFLOAT4 VelocityLifetime = { 0.0f, 0.0f, 0.0f, 1.0f };  // xyz = velocity, w = lifetime
@@ -136,6 +155,7 @@ static_assert(sizeof(ObjectConstants) % 16 == 0, "ObjectConstants must be 16-byt
 static_assert(sizeof(PassConstants) % 16 == 0, "PassConstants must be 16-byte aligned sized.");
 static_assert(sizeof(MaterialConstants) % 16 == 0, "MaterialConstants must be 16-byte aligned sized.");
 static_assert(sizeof(DeferredPassConstants) % 16 == 0, "DeferredPassConstants must be 16-byte aligned sized.");
+static_assert(sizeof(PostProcessConstants) % 16 == 0, "PostProcessConstants must be 16-byte aligned sized.");
 static_assert(sizeof(GpuParticle) % 16 == 0, "GpuParticle must be 16-byte aligned sized.");
 static_assert(sizeof(ParticleSimConstants) % 16 == 0, "ParticleSimConstants must be 16-byte aligned sized.");
 #endif // !RENDER_STRUCTS_HPP

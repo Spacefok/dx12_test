@@ -17,6 +17,13 @@ public:
 	ID3D12RootSignature* LightingRootSignature() const { return m_lightingRootSignature.Get(); }
 	ID3D12PipelineState* LightingPSO() const { return m_lightingPso.Get(); }
 
+	ID3D12RootSignature* PostProcessRootSignature() const { return m_postProcessRootSignature.Get(); }
+	ID3D12PipelineState* PostDownsamplePSO() const { return m_postDownsamplePso.Get(); }
+	ID3D12PipelineState* PostBrightPassPSO() const { return m_postBrightPassPso.Get(); }
+	ID3D12PipelineState* PostBlurHorizontalPSO() const { return m_postBlurHorizontalPso.Get(); }
+	ID3D12PipelineState* PostBlurVerticalPSO() const { return m_postBlurVerticalPso.Get(); }
+	ID3D12PipelineState* PostFinalPSO() const { return m_postFinalPso.Get(); }
+
 	ID3D12RootSignature* ShadowRootSignature() const { return m_shadowRootSignature.Get(); }
 	ID3D12PipelineState* ShadowBasicPSO() const { return m_shadowBasicPso.Get(); }
 	ID3D12PipelineState* ShadowTessellationPSO() const { return m_shadowTessellationPso.Get(); }
@@ -37,6 +44,12 @@ private:
 	ComPtr<ID3DBlob> m_forwardTransparentPsByteCode;
 	ComPtr<ID3DBlob> m_lightingVsByteCode;
 	ComPtr<ID3DBlob> m_lightingPsByteCode;
+	ComPtr<ID3DBlob> m_postProcessVsByteCode;
+	ComPtr<ID3DBlob> m_postDownsamplePsByteCode;
+	ComPtr<ID3DBlob> m_postBrightPassPsByteCode;
+	ComPtr<ID3DBlob> m_postBlurHorizontalPsByteCode;
+	ComPtr<ID3DBlob> m_postBlurVerticalPsByteCode;
+	ComPtr<ID3DBlob> m_postFinalPsByteCode;
 	ComPtr<ID3DBlob> m_shadowBasicVsByteCode;
 	ComPtr<ID3DBlob> m_shadowControlPointVsByteCode;
 	ComPtr<ID3DBlob> m_shadowHsByteCode;
@@ -51,6 +64,7 @@ private:
 
 	ComPtr<ID3D12RootSignature> m_geometryRootSignature;
 	ComPtr<ID3D12RootSignature> m_lightingRootSignature;
+	ComPtr<ID3D12RootSignature> m_postProcessRootSignature;
 	ComPtr<ID3D12RootSignature> m_shadowRootSignature;
 	ComPtr<ID3D12RootSignature> m_particleGraphicsRootSignature;
 	ComPtr<ID3D12RootSignature> m_particleComputeRootSignature;
@@ -59,6 +73,11 @@ private:
 	ComPtr<ID3D12PipelineState> m_geometryTessellationPso;
 	ComPtr<ID3D12PipelineState> m_forwardTransparentPso;
 	ComPtr<ID3D12PipelineState> m_lightingPso;
+	ComPtr<ID3D12PipelineState> m_postDownsamplePso;
+	ComPtr<ID3D12PipelineState> m_postBrightPassPso;
+	ComPtr<ID3D12PipelineState> m_postBlurHorizontalPso;
+	ComPtr<ID3D12PipelineState> m_postBlurVerticalPso;
+	ComPtr<ID3D12PipelineState> m_postFinalPso;
 	ComPtr<ID3D12PipelineState> m_shadowBasicPso;
 	ComPtr<ID3D12PipelineState> m_shadowTessellationPso;
 	ComPtr<ID3D12PipelineState> m_particleGraphicsPso;

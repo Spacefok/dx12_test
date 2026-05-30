@@ -76,6 +76,9 @@
     <None Include="shader\Particles.hlsl">
       <Filter>Файлы ресурсов</Filter>
     </None>
+    <None Include="shader\PostProcess.hlsl">
+      <Filter>Файлы ресурсов</Filter>
+    </None>
     <None Include="shader\ShadowMap.hlsl">
       <Filter>Файлы ресурсов</Filter>
     </None>

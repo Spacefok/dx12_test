@@ -57,6 +57,8 @@ D3D12_RASTERIZER_DESC ShadowRasterizer()
 	rasterDesc.SlopeScaledDepthBias = 2.0f;
 	return rasterDesc;
 }
+
+constexpr DXGI_FORMAT kHdrRenderTargetFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
 } // namespace
 
 void RenderingSystem::BuildShaders()
@@ -70,6 +72,13 @@ void RenderingSystem::BuildShaders()
 
 	m_lightingVsByteCode = CompileShader(L"shader\\DeferredLighting.hlsl", nullptr, "VSFullscreen", "vs_5_1");
 	m_lightingPsByteCode = CompileShader(L"shader\\DeferredLighting.hlsl", nullptr, "PSLighting", "ps_5_1");
+
+	m_postProcessVsByteCode = CompileShader(L"shader\\PostProcess.hlsl", nullptr, "VSFullscreen", "vs_5_1");
+	m_postDownsamplePsByteCode = CompileShader(L"shader\\PostProcess.hlsl", nullptr, "PSDownsample", "ps_5_1");
+	m_postBrightPassPsByteCode = CompileShader(L"shader\\PostProcess.hlsl", nullptr, "PSBrightPass", "ps_5_1");
+	m_postBlurHorizontalPsByteCode = CompileShader(L"shader\\PostProcess.hlsl", nullptr, "PSBlurHorizontal", "ps_5_1");
+	m_postBlurVerticalPsByteCode = CompileShader(L"shader\\PostProcess.hlsl", nullptr, "PSBlurVertical", "ps_5_1");
+	m_postFinalPsByteCode = CompileShader(L"shader\\PostProcess.hlsl", nullptr, "PSFinalComposite", "ps_5_1");
 
 	m_shadowBasicVsByteCode = CompileShader(L"shader\\ShadowMap.hlsl", nullptr, "VSShadowBasic", "vs_5_1");
 	m_shadowControlPointVsByteCode = CompileShader(L"shader\\ShadowMap.hlsl", nullptr, "VSShadowControlPoint", "vs_5_1");
@@ -273,6 +282,71 @@ void RenderingSystem::BuildRootSignatures(ID3D12Device* device)
 			D3D12_ROOT_SIGNATURE_FLAG_DENY_GEOMETRY_SHADER_ROOT_ACCESS;
 
 		m_lightingRootSignature = CreateRootSignature(device, rootSigDesc);
+	}
+
+	{
+		D3D12_DESCRIPTOR_RANGE sourceRange = {};
+		sourceRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+		sourceRange.NumDescriptors = 1;
+		sourceRange.BaseShaderRegister = 0;
+		sourceRange.RegisterSpace = 0;
+		sourceRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+		D3D12_DESCRIPTOR_RANGE finalRange = {};
+		finalRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+		finalRange.NumDescriptors = 3;
+		finalRange.BaseShaderRegister = 1;
+		finalRange.RegisterSpace = 0;
+		finalRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+		D3D12_ROOT_PARAMETER rootParams[3] = {};
+
+		rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+		rootParams[0].Descriptor.ShaderRegister = 0;
+		rootParams[0].Descriptor.RegisterSpace = 0;
+		rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+		rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+		rootParams[1].DescriptorTable.NumDescriptorRanges = 1;
+		rootParams[1].DescriptorTable.pDescriptorRanges = &sourceRange;
+		rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+		rootParams[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+		rootParams[2].DescriptorTable.NumDescriptorRanges = 1;
+		rootParams[2].DescriptorTable.pDescriptorRanges = &finalRange;
+		rootParams[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+		D3D12_STATIC_SAMPLER_DESC samplers[2] = {};
+		samplers[0].Filter = D3D12_FILTER_MIN_MAG_MIP_POINT;
+		samplers[0].AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+		samplers[0].AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+		samplers[0].AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+		samplers[0].MipLODBias = 0.0f;
+		samplers[0].MaxAnisotropy = 1;
+		samplers[0].ComparisonFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+		samplers[0].BorderColor = D3D12_STATIC_BORDER_COLOR_OPAQUE_BLACK;
+		samplers[0].MinLOD = 0.0f;
+		samplers[0].MaxLOD = D3D12_FLOAT32_MAX;
+		samplers[0].ShaderRegister = 0;
+		samplers[0].RegisterSpace = 0;
+		samplers[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+		samplers[1] = samplers[0];
+		samplers[1].Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+		samplers[1].ShaderRegister = 1;
+
+		D3D12_ROOT_SIGNATURE_DESC rootSigDesc = {};
+		rootSigDesc.NumParameters = _countof(rootParams);
+		rootSigDesc.pParameters = rootParams;
+		rootSigDesc.NumStaticSamplers = _countof(samplers);
+		rootSigDesc.pStaticSamplers = samplers;
+		rootSigDesc.Flags =
+			D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT |
+			D3D12_ROOT_SIGNATURE_FLAG_DENY_HULL_SHADER_ROOT_ACCESS |
+			D3D12_ROOT_SIGNATURE_FLAG_DENY_DOMAIN_SHADER_ROOT_ACCESS |
+			D3D12_ROOT_SIGNATURE_FLAG_DENY_GEOMETRY_SHADER_ROOT_ACCESS;
+
+		m_postProcessRootSignature = CreateRootSignature(device, rootSigDesc);
 	}
 
 	{
@@ -590,7 +664,7 @@ void RenderingSystem::BuildPSOs(ID3D12Device* device, DXGI_FORMAT backBufferForm
 		psoDesc.SampleMask = D3D12_DEFAULT_SAMPLE_MASK;
 		psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
 		psoDesc.NumRenderTargets = 1;
-		psoDesc.RTVFormats[0] = backBufferFormat;
+		psoDesc.RTVFormats[0] = kHdrRenderTargetFormat;
 		psoDesc.DSVFormat = depthStencilFormat;
 		psoDesc.SampleDesc.Count = 1;
 		psoDesc.SampleDesc.Quality = 0;
@@ -688,12 +762,69 @@ void RenderingSystem::BuildPSOs(ID3D12Device* device, DXGI_FORMAT backBufferForm
 		psoDesc.SampleMask = D3D12_DEFAULT_SAMPLE_MASK;
 		psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
 		psoDesc.NumRenderTargets = 1;
-		psoDesc.RTVFormats[0] = backBufferFormat;
+		psoDesc.RTVFormats[0] = kHdrRenderTargetFormat;
 		psoDesc.DSVFormat = DXGI_FORMAT_UNKNOWN;
 		psoDesc.SampleDesc.Count = 1;
 		psoDesc.SampleDesc.Quality = 0;
 
 		ThrowIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&m_lightingPso)));
+	}
+
+	{
+		D3D12_BLEND_DESC blendDesc = {};
+		blendDesc.AlphaToCoverageEnable = FALSE;
+		blendDesc.IndependentBlendEnable = FALSE;
+		{
+			D3D12_RENDER_TARGET_BLEND_DESC rt = {};
+			rt.BlendEnable = FALSE;
+			rt.LogicOpEnable = FALSE;
+			rt.SrcBlend = D3D12_BLEND_ONE;
+			rt.DestBlend = D3D12_BLEND_ZERO;
+			rt.BlendOp = D3D12_BLEND_OP_ADD;
+			rt.SrcBlendAlpha = D3D12_BLEND_ONE;
+			rt.DestBlendAlpha = D3D12_BLEND_ZERO;
+			rt.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+			rt.LogicOp = D3D12_LOGIC_OP_NOOP;
+			rt.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+			blendDesc.RenderTarget[0] = rt;
+		}
+
+		D3D12_DEPTH_STENCIL_DESC dsDesc = {};
+		dsDesc.DepthEnable = FALSE;
+		dsDesc.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+		dsDesc.DepthFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+		dsDesc.StencilEnable = FALSE;
+
+		D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
+		psoDesc.InputLayout = { nullptr, 0 };
+		psoDesc.pRootSignature = m_postProcessRootSignature.Get();
+		psoDesc.VS = { m_postProcessVsByteCode->GetBufferPointer(), m_postProcessVsByteCode->GetBufferSize() };
+		psoDesc.PS = { m_postDownsamplePsByteCode->GetBufferPointer(), m_postDownsamplePsByteCode->GetBufferSize() };
+		psoDesc.RasterizerState = DefaultRasterizer(D3D12_CULL_MODE_NONE);
+		psoDesc.BlendState = blendDesc;
+		psoDesc.DepthStencilState = dsDesc;
+		psoDesc.SampleMask = D3D12_DEFAULT_SAMPLE_MASK;
+		psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+		psoDesc.NumRenderTargets = 1;
+		psoDesc.RTVFormats[0] = kHdrRenderTargetFormat;
+		psoDesc.DSVFormat = DXGI_FORMAT_UNKNOWN;
+		psoDesc.SampleDesc.Count = 1;
+		psoDesc.SampleDesc.Quality = 0;
+
+		ThrowIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&m_postDownsamplePso)));
+
+		psoDesc.PS = { m_postBrightPassPsByteCode->GetBufferPointer(), m_postBrightPassPsByteCode->GetBufferSize() };
+		ThrowIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&m_postBrightPassPso)));
+
+		psoDesc.PS = { m_postBlurHorizontalPsByteCode->GetBufferPointer(), m_postBlurHorizontalPsByteCode->GetBufferSize() };
+		ThrowIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&m_postBlurHorizontalPso)));
+
+		psoDesc.PS = { m_postBlurVerticalPsByteCode->GetBufferPointer(), m_postBlurVerticalPsByteCode->GetBufferSize() };
+		ThrowIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&m_postBlurVerticalPso)));
+
+		psoDesc.PS = { m_postFinalPsByteCode->GetBufferPointer(), m_postFinalPsByteCode->GetBufferSize() };
+		psoDesc.RTVFormats[0] = backBufferFormat;
+		ThrowIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&m_postFinalPso)));
 	}
 
 	{
@@ -740,7 +871,7 @@ void RenderingSystem::BuildPSOs(ID3D12Device* device, DXGI_FORMAT backBufferForm
 		psoDesc.SampleMask = D3D12_DEFAULT_SAMPLE_MASK;
 		psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_POINT;
 		psoDesc.NumRenderTargets = 1;
-		psoDesc.RTVFormats[0] = backBufferFormat;
+		psoDesc.RTVFormats[0] = kHdrRenderTargetFormat;
 		psoDesc.DSVFormat = depthStencilFormat;
 		psoDesc.SampleDesc.Count = 1;
 		psoDesc.SampleDesc.Quality = 0;
