@@ -15,7 +15,8 @@ cbuffer PostProcessCB : register(b0)
     float gGrainStrength;
     float gGamma;
     float2 gCameraNearFar;
-    float2 gPostPad;
+    float gFisheyeStrength;
+    float gFisheyeZoom;
 };
 
 Texture2D gSourceTex : register(t0);
@@ -155,6 +156,21 @@ float3 SampleSceneChromatic(float2 uv)
     return float3(r, g, b);
 }
 
+float2 ApplyFisheye(float2 uv, out float inBounds)
+{
+    float2 centered = uv * 2.0f - 1.0f;
+    float radiusSq = dot(centered, centered);
+    float warp = 1.0f + gFisheyeStrength * radiusSq;
+    float2 warped = centered * warp / max(gFisheyeZoom, 1e-3f);
+    float2 warpedUv = warped * 0.5f + 0.5f;
+
+    inBounds =
+        (warpedUv.x >= 0.0f && warpedUv.x <= 1.0f &&
+         warpedUv.y >= 0.0f && warpedUv.y <= 1.0f) ? 1.0f : 0.0f;
+
+    return saturate(warpedUv);
+}
+
 float3 AcesFitted(float3 color)
 {
     const float a = 2.51f;
@@ -172,7 +188,8 @@ float InterleavedGradientNoise(float2 pixel)
 
 float4 PSFinalComposite(FullscreenOut pin) : SV_Target
 {
-    float2 uv = pin.TexC;
+    float edgeMask = 1.0f;
+    float2 uv = ApplyFisheye(pin.TexC, edgeMask);
 
     float3 scene = SampleSceneChromatic(uv);
     float3 blurredScene = gSceneBlurTex.SampleLevel(gSamLinearClamp, uv, 0.0f).rgb;
@@ -183,9 +200,9 @@ float4 PSFinalComposite(FullscreenOut pin) : SV_Target
 
     float3 ldr = AcesFitted(hdr * gExposure);
 
-    float2 centered = uv * 2.0f - 1.0f;
+    float2 centered = pin.TexC * 2.0f - 1.0f;
     float vignette = saturate(1.0f - dot(centered, centered) * gVignetteStrength);
-    ldr *= vignette;
+    ldr *= vignette * edgeMask;
 
     float noise = InterleavedGradientNoise(pin.PosH.xy + gTime * float2(37.0f, 17.0f)) - 0.5f;
     ldr += noise * gGrainStrength;

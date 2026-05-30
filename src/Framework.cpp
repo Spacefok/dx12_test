@@ -1788,6 +1788,8 @@ void Framework::Update(const double& dt)
 		post.GrainStrength = m_showBufferDebug ? 0.0f : 0.008f;
 		post.Gamma = 2.2f;
 		post.CameraNearFar = { CameraNearZ, CameraFarZ };
+		post.FisheyeStrength = m_showBufferDebug ? 0.0f : 0.24f;
+		post.FisheyeZoom = 1.08f;
 		m_postProcessCB->CopyData(0, post);
 	}
 
@@ -6749,4 +6751,3 @@ void Framework::OnMouseMove(HWND hwnd,	WPARAM btnState, int x, int y)
 
 	XMStoreFloat3(&m_camTarget, tgt);
 }
-

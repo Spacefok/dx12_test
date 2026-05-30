@@ -129,7 +129,8 @@ struct alignas(16) PostProcessConstants {
 	float GrainStrength = 0.010f;
 	float Gamma = 2.2f;
 	DirectX::XMFLOAT2 CameraNearFar = { 0.1f, 1000.0f };
-	DirectX::XMFLOAT2 _pad = { 0.0f, 0.0f };
+	float FisheyeStrength = 0.22f;
+	float FisheyeZoom = 1.08f;
 };
 
 struct alignas(16) GpuParticle {
