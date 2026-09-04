@@ -34,6 +34,7 @@ constexpr std::uint32_t MaterialFlagHasOpacityTexture = 1u << 3;
 constexpr std::uint32_t MaterialFlagDisplacementFromNormal = 1u << 4;
 constexpr std::uint32_t MaterialFlagUseTessellation = 1u << 5;
 constexpr std::uint32_t MaterialFlagProceduralWater = 1u << 6;
+constexpr std::uint32_t MaterialFlagLodDebug = 1u << 7;
 
 struct alignas(16) ObjectConstants {
 	DirectX::XMFLOAT4X4 World = dx::Identity4x4();

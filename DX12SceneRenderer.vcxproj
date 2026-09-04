@@ -124,12 +124,16 @@
       <LanguageStandard>stdcpp17</LanguageStandard>
     </ClCompile>
     <Link>
-      <SubSystem>Console</SubSystem>
+      <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalDependencies>d3d12.lib;dxgi.lib;dxguid.lib;d3dcompiler.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="src\Framework.cpp" />
+    <ClCompile Include="src\Terrain.cpp" />
+    <ClCompile Include="src\TerrainRendering.cpp" />
+    <ClCompile Include="src\FrameCapture.cpp" />
     <ClCompile Include="src\Gbuffer.cpp" />
     <ClCompile Include="src\RenderingSystem.cpp" />
     <ClCompile Include="src\Timer.cpp" />
@@ -140,6 +144,7 @@
   <ItemGroup>
     <ClInclude Include="include\Dx12Common.hpp" />
     <ClInclude Include="include\Framework.hpp" />
+    <ClInclude Include="include\Terrain.hpp" />
     <ClInclude Include="include\Gbuffer.hpp" />
     <ClInclude Include="include\RenderStructs.hpp" />
     <ClInclude Include="include\RenderingSystem.hpp" />

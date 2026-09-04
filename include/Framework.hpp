@@ -17,10 +17,11 @@
 #include "RenderStructs.hpp"
 #include "Gbuffer.hpp"
 #include "RenderingSystem.hpp"
+#include "Terrain.hpp"
 
 class Framework : public IWindowMessageHandler {
 public:
-	explicit Framework(int width, int height, const wchar_t* title);
+	explicit Framework(int width, int height, const wchar_t* title, size_t initialScene = 0);
 	virtual ~Framework();
 
 	bool Init();
@@ -33,6 +34,7 @@ protected:
 	virtual void OnResize();
 	virtual void Update(const double& dt);
 	virtual void Draw();
+	void CaptureFrame(const std::filesystem::path& path);
 
 	virtual void OnMouseDown(HWND hwnd, WPARAM btnState, int x, int y);
 	virtual void OnMouseUp(HWND hwnd, WPARAM btnState, int x, int y);
@@ -243,6 +245,10 @@ private:
 	void BuildOctree();
 	void UpdateVisibleObjects(const DirectX::XMMATRIX& viewProj);
 	void UpdateDynamicSceneObjects();
+	void UpdateTerrain(const DirectX::XMMATRIX& viewProj);
+	void DrawTerrain();
+	void SaveFrameCapture(const std::filesystem::path& path);
+	std::filesystem::path m_pendingFrameCapture;
 
 	void BuildBoxGeometry();
 
@@ -358,6 +364,7 @@ private:
 		DirectX::XMFLOAT4 WaterPlaneColor = { 0.20f, 0.57f, 0.86f, 1.0f };
 		DirectX::XMFLOAT4 WaterWaveParams = { 0.028f, 5.5f, 1.15f, 0.42f };
 		bool EnableScatterField = false;
+		bool EnableTerrain = false;
 		DirectX::XMFLOAT3 ScatterFieldHalfExtents = { 10.0f, 4.0f, 10.0f };
 		UINT ScatterOccluderCount = 18;
 		UINT ScatterBoxCount = 1536;
@@ -385,6 +392,12 @@ private:
 	std::vector<ModelMaterial> m_modelMaterials;
 	std::vector<UINT> m_scatterMaterialIndices;
 	std::vector<SceneObject> m_sceneObjects;
+	terrain::Terrain m_terrain;
+	std::vector<unsigned> m_terrainShadowNodes;
+	bool m_terrainLodColors = false;
+	bool m_terrainFreeze = false;
+	bool m_terrainWireframe = false;
+	float m_terrainPixelError = 3.0f;
 	std::vector<UINT> m_visibleObjectIndices;
 	std::vector<UINT> m_visibleOpaqueObjectIndices;
 	std::vector<UINT> m_visibleTransparentObjectIndices;

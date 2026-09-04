@@ -1248,12 +1248,13 @@ bool LooksLikeDisplacementMapPath(const std::filesystem::path& texturePath)
 }
 } // namespace
 
-Framework::Framework(int width, int height, const wchar_t* title)
+Framework::Framework(int width, int height, const wchar_t* title, size_t initialScene)
 	: m_initWidth(width)
 	, m_initHeight(height)
 	, m_title(title ? title : L"")
 	, m_clientWidth(width)
 	, m_clientHeight(height)
+	, m_currentSceneIndex(initialScene)
 {
 }
 
@@ -1434,6 +1435,7 @@ LRESULT Framework::MsgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			else if (vk == VK_F2)
 			{
 				m_enableFrustumCulling = !m_enableFrustumCulling;
+				m_terrainFreeze = false;
 				if (!m_enableFrustumCulling) {
 					m_useOctreeForCulling = false;
 				}
@@ -1456,6 +1458,27 @@ LRESULT Framework::MsgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			{
 				m_enableLocalLights = !m_enableLocalLights;
 				UpdateWindowTitle();
+			}
+			else if (!m_terrain.Empty() && vk == VK_F6) {
+				m_terrainLodColors = !m_terrainLodColors;
+			}
+			else if (!m_terrain.Empty() && vk == VK_F7) {
+				m_terrainFreeze = !m_terrainFreeze;
+			}
+			else if (!m_terrain.Empty() && vk == VK_F8) {
+				m_terrainWireframe = !m_terrainWireframe;
+			}
+			else if (!m_terrain.Empty() && (vk == VK_ADD || vk == VK_OEM_PLUS)) {
+				m_terrainPixelError = (std::max)(0.5f, m_terrainPixelError * 0.5f);
+				m_terrainFreeze = false;
+			}
+			else if (!m_terrain.Empty() && (vk == VK_SUBTRACT || vk == VK_OEM_MINUS)) {
+				m_terrainPixelError = (std::min)(32.0f, m_terrainPixelError * 2.0f);
+				m_terrainFreeze = false;
+			}
+			else if (vk == VK_HOME) {
+				ResetCameraForCurrentScene();
+				m_terrainFreeze = false;
 			}
 			else if (vk >= '1' && vk <= '9')
 			{
@@ -1667,6 +1690,7 @@ void Framework::Update(const double& dt)
 	XMMATRIX viewProj = view * proj;
 	UpdateDynamicSceneObjects();
 	UpdateVisibleObjects(viewProj);
+	UpdateTerrain(viewProj);
 	UpdateCascadedShadowMaps(view);
 
 	PassConstants pass{};
@@ -1790,6 +1814,15 @@ void Framework::Update(const double& dt)
 		post.CameraNearFar = { CameraNearZ, CameraFarZ };
 		post.FisheyeStrength = m_showBufferDebug ? 0.0f : 0.24f;
 		post.FisheyeZoom = 1.08f;
+		if (!m_terrain.Empty()) {
+			// Keep the terrain silhouette and frustum boundary undistorted.
+			post.MaxDofBlur = 0.0f;
+			post.FisheyeStrength = 0.0f;
+			post.FisheyeZoom = 1.0f;
+			post.ChromaticAberration = 0.0f;
+			post.GrainStrength = 0.0f;
+			post.BloomStrength = m_terrainLodColors || m_terrainWireframe ? 0.0f : 0.18f;
+		}
 		m_postProcessCB->CopyData(0, post);
 	}
 
@@ -1845,8 +1878,10 @@ void Framework::Draw()
 	ID3D12DescriptorHeap* heaps[] = { m_cbvHeap.Get() };
 	m_commandList->SetDescriptorHeaps(_countof(heaps), heaps);
 
-	SimulateParticles();
-	SortParticlesOnGpu();
+	if (m_terrain.Empty()) {
+		SimulateParticles();
+		SortParticlesOnGpu();
+	}
 	RenderSceneToShadowMap();
 
 	m_commandList->RSSetViewports(1, &m_screenViewport);
@@ -2012,6 +2047,7 @@ void Framework::Draw()
 		}
 	}
 
+	DrawTerrain();
 	m_gbuffer.TransitionToShaderResources(m_commandList.Get());
 
 	D3D12_RESOURCE_BARRIER depthToSrv{};
@@ -2074,7 +2110,9 @@ void Framework::Draw()
 	{
 		const D3D12_CPU_DESCRIPTOR_HANDLE depthView = DepthStencilView();
 		m_commandList->OMSetRenderTargets(1, &hdrSceneRtv, TRUE, &depthView);
-		DrawTransparentParticles();
+		if (m_terrain.Empty()) {
+			DrawTransparentParticles();
+		}
 	}
 
 	D3D12_RESOURCE_BARRIER depthToSrvForPost{};
@@ -2108,8 +2146,12 @@ void Framework::Draw()
 	ID3D12CommandList* cmdsLists[] = { m_commandList.Get() };
 	m_commandQueue->ExecuteCommandLists(_countof(cmdsLists), cmdsLists);
 
+	if (!m_pendingFrameCapture.empty()) {
+		SaveFrameCapture(m_pendingFrameCapture);
+		m_pendingFrameCapture.clear();
+	}
 	ThrowIfFailed(m_swapChain->Present(0, 0));
-	m_currBackBuffer = (m_currBackBuffer + 1) % SwapChainBufferCount;
+	m_currBackBuffer = static_cast<int>(m_swapChain->GetCurrentBackBufferIndex());
 
 	FlushCommandQueue();
 }
@@ -3132,6 +3174,18 @@ void Framework::RenderSceneToShadowMap()
 		bool boxGeometryBound = false;
 		bool boxPipelineBound = false;
 
+		if (!m_terrain.Empty() && m_modelVB) {
+			m_commandList->SetGraphicsRootConstantBufferView(0, objectCbBaseAddress);
+			m_commandList->SetPipelineState(m_renderingSystem.ShadowBasicPSO());
+			m_commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+			m_commandList->IASetVertexBuffers(0, 1, &m_modelVBV);
+			BindShadowMaterial(m_modelMaterials.front());
+			for (unsigned nodeIndex : m_terrainShadowNodes) {
+				const auto& node = m_terrain.Nodes()[nodeIndex];
+				m_commandList->DrawInstanced(node.VertexCount, 1, node.StartVertex, 0);
+			}
+		}
+
 		for (UINT objectIndex = 0; objectIndex < static_cast<UINT>(m_sceneObjects.size()); ++objectIndex)
 		{
 			const SceneObject& sceneObject = m_sceneObjects[objectIndex];
@@ -3936,6 +3990,20 @@ void Framework::InitializeSceneDefinitions()
 	cullingLab.DeferredAmbientIntensity = 0.20f;
 	cullingLab.DeferredAmbientColor = { 0.82f, 0.86f, 0.92f, 1.0f };
 	m_sceneDefinitions.push_back(cullingLab);
+
+	SceneDefinition landscape = {};
+	landscape.Name = L"Terrain";
+	landscape.Format = SceneAssetFormat::Procedural;
+	landscape.EnableTerrain = true;
+	landscape.CameraPos = { 24.0f, 22.0f, -38.0f };
+	landscape.CameraTarget = { 0.0f, 4.0f, 0.0f };
+	landscape.CameraMoveSpeed = 10.0f;
+	landscape.EnableUvScroll = false;
+	landscape.EnableWindAnimation = false;
+	landscape.LightingPreset = SceneLightingPreset::SanMiguel;
+	landscape.DeferredAmbientIntensity = 0.30f;
+	landscape.DeferredAmbientColor = { 0.80f, 0.90f, 1.0f, 1.0f };
+	m_sceneDefinitions.push_back(landscape);
 }
 
 void Framework::LoadScene(size_t sceneIndex, bool resetCamera)
@@ -3998,6 +4066,20 @@ void Framework::UpdateWindowTitle() const
 	}
 
 	std::wstring title = m_title ? m_title : L"DX12 Scene Renderer";
+	if (!m_terrain.Empty()) {
+		const auto& stats = m_terrain.Statistics();
+		title += L" | Terrain | patches " + std::to_wstring(stats.SelectedPatches);
+		title += L" | triangles " + std::to_wstring(stats.Triangles);
+		title += L" | depth " + std::to_wstring(stats.MinDepth) + L"-" + std::to_wstring(stats.MaxDepth);
+		title += L" | culled " + std::to_wstring(stats.CulledNodes);
+		title += L" | error " + std::to_wstring(m_terrainPixelError).substr(0, 4) + L"px";
+		title += m_enableFrustumCulling ? L" | F2 cull ON" : L" | F2 cull OFF";
+		title += m_terrainLodColors ? L" | F6 LOD ON" : L" | F6 LOD OFF";
+		title += m_terrainFreeze ? L" | F7 FROZEN" : L" | F7 live";
+		title += m_terrainWireframe ? L" | F8 wire" : L" | F8 solid";
+		SetWindowTextW(MainWnd(), title.c_str());
+		return;
+	}
 	if (!m_sceneDefinitions.empty()) {
 		title += L" | Scene: ";
 		title += m_sceneDefinitions[m_currentSceneIndex].Name;
@@ -4044,6 +4126,13 @@ void Framework::BuildSceneObjects()
 	}
 
 	const SceneDefinition& scene = m_sceneDefinitions[m_currentSceneIndex];
+
+	if (!m_terrain.Empty()) {
+		SceneObject terrainObject = {};
+		terrainObject.Bounds = m_normalizedSceneBounds;
+		m_sceneObjects.push_back(terrainObject);
+		return;
+	}
 
 	auto ComputeBoxBoundsFromWorld = [](FXMMATRIX world) -> Aabb
 	{
@@ -4427,6 +4516,10 @@ void Framework::UpdateVisibleObjects(const DirectX::XMMATRIX& viewProj)
 	m_visibleOpaqueObjectIndices.clear();
 	m_visibleTransparentObjectIndices.clear();
 	m_occlusionCulledObjectCount = 0;
+
+	if (!m_terrain.Empty()) {
+		return; // Terrain uses its own quadtree traversal in UpdateTerrain.
+	}
 
 	if (m_sceneObjects.empty())
 	{
@@ -5431,6 +5524,9 @@ void Framework::BuildSceneGeometryUpload()
 	m_treeLocalHeight = 0.0f;
 	m_treeBarkMaterialIndex = 0;
 	m_treeLeafMaterialIndex = 0;
+	m_terrain.Clear();
+	m_terrainShadowNodes.clear();
+	m_terrainFreeze = false;
 
 	std::vector<LoadedTextureData> textureImages;
 	textureImages.reserve(64);
@@ -6422,7 +6518,15 @@ void Framework::BuildSceneGeometryUpload()
 		vertices.insert(vertices.end(), bucket.begin(), bucket.end());
 	}
 
-	if (vertices.empty())
+	if (scene.EnableTerrain)
+	{
+		m_terrain.Load(std::filesystem::path(L"assets") / L"terrain");
+		const auto& root = m_terrain.Nodes().front();
+		m_modelCenter = { 0.0f, 0.0f, 0.0f };
+		m_modelScale = 1.0f;
+		m_normalizedSceneBounds = { root.Min, root.Max };
+	}
+	else if (vertices.empty())
 	{
 		if (!scene.EnableScatterField) {
 			throw std::runtime_error("Scene loaded but produced 0 vertices.");
@@ -6461,7 +6565,7 @@ void Framework::BuildSceneGeometryUpload()
 		};
 	}
 
-	m_modelVertexCount = static_cast<UINT>(vertices.size());
+	m_modelVertexCount = static_cast<UINT>(scene.EnableTerrain ? m_terrain.Vertices().size() : vertices.size());
 	m_treeVertexCount = static_cast<UINT>(treeVertices.size());
 	m_treeBillboardVertexCount = static_cast<UINT>(treeBillboardVertices.size());
 
@@ -6657,7 +6761,7 @@ void Framework::BuildSceneGeometryUpload()
 		outView.SizeInBytes = byteSize;
 	};
 
-	UploadVertexBuffer(vertices, m_modelVB, m_modelVBUpload, m_modelVBV);
+	UploadVertexBuffer(scene.EnableTerrain ? m_terrain.Vertices() : vertices, m_modelVB, m_modelVBUpload, m_modelVBV);
 	UploadVertexBuffer(treeVertices, m_treeVB, m_treeVBUpload, m_treeVBV);
 	UploadVertexBuffer(treeBillboardVertices, m_treeBillboardVB, m_treeBillboardVBUpload, m_treeBillboardVBV);
 

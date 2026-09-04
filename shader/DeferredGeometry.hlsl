@@ -5,6 +5,7 @@ static const uint MATERIAL_FLAG_HAS_OPACITY_TEXTURE = 1u << 3;
 static const uint MATERIAL_FLAG_DISPLACEMENT_FROM_NORMAL = 1u << 4;
 static const uint MATERIAL_FLAG_USE_TESSELLATION = 1u << 5;
 static const uint MATERIAL_FLAG_PROCEDURAL_WATER = 1u << 6;
+static const uint MATERIAL_FLAG_LOD_DEBUG = 1u << 7;
 
 cbuffer ObjectCB : register(b0)
 {
@@ -467,6 +468,8 @@ GBufferOut PSGBuffer(GeometryPSInput pin)
     }
 
     float3 albedo = pin.Color.rgb * gMatDiffuseAlbedo.rgb * baseColorSample.rgb;
+    if ((gMatFlags & MATERIAL_FLAG_LOD_DEBUG) != 0u)
+        albedo = gMatDiffuseAlbedo.rgb;
 
     float3 normalW = SafeNormalize(pin.NormalW, float3(0.0f, 1.0f, 0.0f));
     if ((gMatFlags & MATERIAL_FLAG_HAS_NORMAL_TEXTURE) != 0u)

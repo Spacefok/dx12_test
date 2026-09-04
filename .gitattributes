@@ -12,3 +12,4 @@ src/ufbx.c linguist-vendored
 *.png binary
 *.psd binary
 *.tga binary
+*.r16 binary

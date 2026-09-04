@@ -1,12 +1,22 @@
 #include <Windows.h>
 #include <exception>
+#include <string>
+#include <sstream>
 #include "Framework.hpp"
 
-int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
+int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR commandLine, int)
 {
     try
     {
-        Framework app(1280, 720, L"DX12 Scene Renderer");
+        std::wistringstream arguments(commandLine ? commandLine : L"");
+        std::wstring argument;
+        size_t initialScene = 0;
+        while (arguments >> argument) {
+            if (argument != L"--terrain")
+                throw std::invalid_argument("Usage: DX12SceneRenderer.exe [--terrain]");
+            initialScene = 4;
+        }
+        Framework app(1280, 720, L"DX12 Scene Renderer", initialScene);
         if (!app.Init()) return 0;
         return app.Run();
     }

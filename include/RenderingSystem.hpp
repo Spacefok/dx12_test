@@ -11,6 +11,7 @@ public:
 
 	ID3D12RootSignature* GeometryRootSignature() const { return m_geometryRootSignature.Get(); }
 	ID3D12PipelineState* GeometryBasicPSO() const { return m_geometryBasicPso.Get(); }
+	ID3D12PipelineState* GeometryWireframePSO() const { return m_geometryWireframePso.Get(); }
 	ID3D12PipelineState* GeometryTessellationPSO() const { return m_geometryTessellationPso.Get(); }
 	ID3D12PipelineState* ForwardTransparentPSO() const { return m_forwardTransparentPso.Get(); }
 
@@ -70,6 +71,7 @@ private:
 	ComPtr<ID3D12RootSignature> m_particleComputeRootSignature;
 
 	ComPtr<ID3D12PipelineState> m_geometryBasicPso;
+	ComPtr<ID3D12PipelineState> m_geometryWireframePso;
 	ComPtr<ID3D12PipelineState> m_geometryTessellationPso;
 	ComPtr<ID3D12PipelineState> m_forwardTransparentPso;
 	ComPtr<ID3D12PipelineState> m_lightingPso;
