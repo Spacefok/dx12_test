@@ -7,7 +7,8 @@ A Windows-focused DirectX 12 renderer written in C++17 for experimenting with re
 - Deferred lighting pipeline with a G-buffer pass and fullscreen lighting pass
 - Adaptive tessellation and displacement-aware materials
 - OBJ and FBX scene loading via bundled `tinyobjloader` and `ufbx`
-- Five demo scenes: `Sponza`, `Bistro`, `San Miguel`, procedural `Culling Lab`, and `Terrain`
+- Six demo scenes: `Sponza`, `Bistro`, `San Miguel`, procedural `Culling Lab`, `Terrain`, and `TAA Lab`
+- Native-resolution temporal anti-aliasing with Halton jitter, motion vectors, and neighborhood history clamping
 - Frustum culling, octree culling, and occlusion culling toggles for side-by-side comparison
 - Procedural water surface, scatter-field props, and tree billboard LODs
 - Tiled heightmap terrain with quadtree LOD, screen-space error selection, and frustum culling
@@ -18,13 +19,17 @@ A Windows-focused DirectX 12 renderer written in C++17 for experimenting with re
 - `Space` / `Ctrl` move up and down
 - `Shift` boosts camera speed
 - Hold RMB and move the mouse to look around
-- `1`-`5` switch scenes (`5` selects Terrain)
+- `1`-`6` switch scenes (`5` selects Terrain, `6` selects TAA Lab)
 - `Home` resets the current scene's camera
 - `F1` toggles G-buffer debug view
 - `F2` toggles frustum culling
 - `F3` toggles octree culling
 - `F4` toggles occlusion culling
 - `F5` toggles local lights
+- `T` toggles TAA and projection jitter together
+- `V` shows motion vectors (black means zero motion)
+- `R` toggles history reprojection; `C` toggles neighborhood clamping
+- `P` pauses scene animation; `Home` also clears temporal history
 - In Terrain: `F6` toggles LOD colors, `F7` freezes/unfreezes LOD and the visible patch set, and `F8` toggles wireframe
 - In Terrain: `+` lowers the error threshold for finer detail; `-` raises it for coarser detail
 
@@ -42,6 +47,35 @@ Build steps:
 1. Open `DX12SceneRenderer.sln` in Visual Studio 2022.
 2. Select `x64` and either `Debug` or `Release`.
 3. Build and run from the repository root so relative `assets/` and `shader/` paths resolve correctly.
+
+## TAA Demo
+
+Start the self-contained temporal anti-aliasing scene from the repository root:
+
+~~~powershell
+.\x64\Debug\DX12SceneRenderer.exe --taa-demo
+~~~
+
+The moving red box reveals a striped wall; thin rails and floor lines make
+subpixel aliasing visible. TAA starts enabled. Pause with `P`, compare `T`,
+then resume animation and compare `R` and `C`. The title shows every toggle
+and the history frame count. Resize, scene changes, camera cuts, and `Home`
+invalidate history. Motion debug bypasses accumulation and post effects.
+
+The opaque HDR lighting result is accumulated before tone mapping. Transparent
+objects and particles are drawn afterwards and are not part of TAA history.
+
+From a Visual Studio Developer PowerShell:
+
+~~~powershell
+New-Item -ItemType Directory -Force x64\TemporalAATests | Out-Null
+cl /nologo /std:c++17 /EHsc /W4 /Iinclude tests\TemporalAATests.cpp /Fox64\TemporalAATests\ /Fex64\TemporalAATests\TemporalAATests.exe
+.\x64\TemporalAATests\TemporalAATests.exe
+~~~
+
+These CPU tests check Halton samples, jitter scaling, projection signs, and
+reprojection coordinates. Shader compilation and temporal image quality also
+need a rendered run.
 
 ## Terrain Demo
 

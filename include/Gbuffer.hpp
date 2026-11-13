@@ -6,10 +6,12 @@
 
 class Gbuffer {
 public:
-	static constexpr UINT kTargetCount = 3;
+	static constexpr UINT kTargetCount = 4;
 	static constexpr DXGI_FORMAT kAlbedoFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
 	static constexpr DXGI_FORMAT kNormalFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
 	static constexpr DXGI_FORMAT kPositionSpecFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
+	static constexpr UINT kVelocityIndex = 3;
+	static constexpr DXGI_FORMAT kVelocityFormat = DXGI_FORMAT_R16G16_FLOAT;
 
 	void Resize(ID3D12Device* device, UINT width, UINT height, UINT rtvDescriptorSize);
 	void CreateSrvDescriptors(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE srvStart, UINT descriptorSize) const;
@@ -21,6 +23,7 @@ public:
 	void BindAsRenderTargets(ID3D12GraphicsCommandList* commandList, D3D12_CPU_DESCRIPTOR_HANDLE dsv) const;
 
 	bool IsValid() const { return m_targets[0] != nullptr; }
+	ID3D12Resource* Resource(UINT index) const { return m_targets.at(index).Get(); }
 
 private:
 	void EnsureRtvHeap(ID3D12Device* device, UINT rtvDescriptorSize);
@@ -34,6 +37,7 @@ private:
 	ComPtr<ID3D12DescriptorHeap> m_rtvHeap;
 	std::array<ComPtr<ID3D12Resource>, kTargetCount> m_targets{};
 	std::array<D3D12_RESOURCE_STATES, kTargetCount> m_states{
+		D3D12_RESOURCE_STATE_COMMON,
 		D3D12_RESOURCE_STATE_COMMON,
 		D3D12_RESOURCE_STATE_COMMON,
 		D3D12_RESOURCE_STATE_COMMON

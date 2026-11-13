@@ -17,6 +17,9 @@ cbuffer PostProcessCB : register(b0)
     float2 gCameraNearFar;
     float gFisheyeStrength;
     float gFisheyeZoom;
+    uint gDebugVelocity;
+    uint gCleanOutput;
+    float2 gPostPadding;
 };
 
 Texture2D gSourceTex : register(t0);
@@ -188,6 +191,8 @@ float InterleavedGradientNoise(float2 pixel)
 
 float4 PSFinalComposite(FullscreenOut pin) : SV_Target
 {
+    if (gDebugVelocity != 0)
+        return float4(gSourceTex.SampleLevel(gSamPointClamp, pin.TexC, 0).rgb, 1);
     float edgeMask = 1.0f;
     float2 uv = ApplyFisheye(pin.TexC, edgeMask);
 
@@ -208,7 +213,8 @@ float4 PSFinalComposite(FullscreenOut pin) : SV_Target
     ldr += noise * gGrainStrength;
 
     float dither = InterleavedGradientNoise(pin.PosH.xy + gTime * float2(19.0f, 53.0f)) - 0.5f;
-    ldr += dither / 255.0f;
+    if (gCleanOutput == 0)
+        ldr += dither / 255.0f;
 
     float invGamma = rcp(max(gGamma, 1e-3f));
     float3 gammaEncoded = pow(saturate(ldr), float3(invGamma, invGamma, invGamma));

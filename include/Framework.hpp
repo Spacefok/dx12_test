@@ -18,6 +18,7 @@
 #include "Gbuffer.hpp"
 #include "RenderingSystem.hpp"
 #include "Terrain.hpp"
+#include "TemporalAA.hpp"
 
 class Framework : public IWindowMessageHandler {
 public:
@@ -121,6 +122,29 @@ private:
 	UINT m_postProcessWidth = 0;
 	UINT m_postProcessHeight = 0;
 
+	std::array<ComPtr<ID3D12Resource>, 2> m_taaHistory;
+	ComPtr<ID3D12DescriptorHeap> m_taaRtvHeap;
+	std::unique_ptr<UploadBuffer<TemporalAAConstants>> m_taaCB;
+	UINT m_taaSrvBaseIndex = 0;
+	UINT m_taaReadIndex = 0;
+	UINT m_taaHistoryFrames = 0;
+	std::uint64_t m_taaFrameIndex = 0;
+	bool m_taaEnabled = true;
+	bool m_taaReprojection = true;
+	bool m_taaClamping = true;
+	bool m_taaShowVelocity = false;
+	bool m_taaHistoryValid = false;
+	bool m_previousFrameValid = false;
+	taa::JitterOffset m_taaJitter = {};
+	DirectX::XMFLOAT4X4 m_currentUnjitteredViewProj = {};
+	DirectX::XMFLOAT4X4 m_previousViewProj = {};
+	DirectX::XMFLOAT3 m_previousCameraPos = {};
+	DirectX::XMFLOAT3 m_previousCameraForward = {};
+	float m_animationTime = 0.0f;
+	float m_previousAnimationTime = 0.0f;
+	bool m_animationPaused = false;
+	UINT m_taaDemoMovingObject = UINT_MAX;
+
 	DXGI_FORMAT m_depthStencilFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;
 	DXGI_FORMAT m_depthStencilResourceFormat = DXGI_FORMAT_R24G8_TYPELESS;
 	DXGI_FORMAT m_depthStencilSrvFormat = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
@@ -219,6 +243,13 @@ private:
 		UINT height,
 		D3D12_GPU_DESCRIPTOR_HANDLE sourceSrv);
 	void RunPostProcess();
+	void ResetTemporalHistory();
+	void BuildTemporalResources();
+	void CreateTemporalDescriptors();
+	void RunTemporalAA();
+	void FinishTemporalFrame();
+	void BuildTaaDemoObjects();
+	void UpdateTaaDemoObjects();
 	void UpdateCascadedShadowMaps(const DirectX::XMMATRIX& view);
 	void RenderSceneToShadowMap();
 	void BuildRootSignature();
@@ -365,6 +396,7 @@ private:
 		DirectX::XMFLOAT4 WaterWaveParams = { 0.028f, 5.5f, 1.15f, 0.42f };
 		bool EnableScatterField = false;
 		bool EnableTerrain = false;
+		bool EnableTaaDemo = false;
 		DirectX::XMFLOAT3 ScatterFieldHalfExtents = { 10.0f, 4.0f, 10.0f };
 		UINT ScatterOccluderCount = 18;
 		UINT ScatterBoxCount = 1536;

@@ -37,11 +37,12 @@ cbuffer DeferredPassCB : register(b0)
 Texture2D gAlbedoTex : register(t0);
 Texture2D gNormalTex : register(t1);
 Texture2D gPositionSpecTex : register(t2);
-Texture2D<float> gDepthTex : register(t3);
-StructuredBuffer<DirectionalLight> gDirectionalLights : register(t4);
-StructuredBuffer<PointLight> gPointLights : register(t5);
-StructuredBuffer<SpotLight> gSpotLights : register(t6);
-Texture2DArray<float> gShadowMap : register(t7);
+// t3 is the G-buffer's unjittered motion-vector texture.
+Texture2D<float> gDepthTex : register(t4);
+StructuredBuffer<DirectionalLight> gDirectionalLights : register(t5);
+StructuredBuffer<PointLight> gPointLights : register(t6);
+StructuredBuffer<SpotLight> gSpotLights : register(t7);
+Texture2DArray<float> gShadowMap : register(t8);
 SamplerState gSamPointClamp : register(s0);
 SamplerComparisonState gSamShadowCmp : register(s1);
 

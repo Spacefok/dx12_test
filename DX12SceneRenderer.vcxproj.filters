@@ -33,6 +33,12 @@
     <ClCompile Include="src\FrameCapture.cpp">
       <Filter>Исходные файлы</Filter>
     </ClCompile>
+    <ClCompile Include="src\TemporalRendering.cpp">
+      <Filter>Исходные файлы</Filter>
+    </ClCompile>
+    <ClCompile Include="src\TemporalDemo.cpp">
+      <Filter>Исходные файлы</Filter>
+    </ClCompile>
     <ClCompile Include="src\Gbuffer.cpp">
       <Filter>Исходные файлы</Filter>
     </ClCompile>
@@ -51,6 +57,9 @@
       <Filter>Файлы заголовков</Filter>
     </ClInclude>
     <ClInclude Include="include\Terrain.hpp">
+      <Filter>Файлы заголовков</Filter>
+    </ClInclude>
+    <ClInclude Include="include\TemporalAA.hpp">
       <Filter>Файлы заголовков</Filter>
     </ClInclude>
     <ClInclude Include="include\Gbuffer.hpp">
@@ -76,6 +85,9 @@
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
+    <None Include="shader\TemporalAA.hlsl">
+      <Filter>Файлы ресурсов</Filter>
+    </None>
     <None Include="shader\DeferredGeometry.hlsl">
       <Filter>Файлы ресурсов</Filter>
     </None>

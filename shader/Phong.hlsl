@@ -2,6 +2,7 @@ cbuffer ObjectCB : register(b0)
 {
     float4x4 gWorld;
     float4x4 gWorldInvTranspose;
+    float4x4 gPreviousWorld;
 };
 
 cbuffer PassCB : register(b1)
@@ -26,6 +27,11 @@ cbuffer PassCB : register(b1)
 
     float gTime;
     float3 _pad3;
+    float4 gTessellationParams;
+    float4x4 gUnjitteredViewProj;
+    float4x4 gPreviousViewProj;
+    float gPreviousTime;
+    float3 _pad4;
 };
 
 cbuffer MaterialCB : register(b2)

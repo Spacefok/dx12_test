@@ -3,6 +3,7 @@
 
 #include <DirectXMath.h>
 #include <cstdint>
+#include <cstddef>
 #include <array>
 
 namespace dx {
@@ -35,10 +36,12 @@ constexpr std::uint32_t MaterialFlagDisplacementFromNormal = 1u << 4;
 constexpr std::uint32_t MaterialFlagUseTessellation = 1u << 5;
 constexpr std::uint32_t MaterialFlagProceduralWater = 1u << 6;
 constexpr std::uint32_t MaterialFlagLodDebug = 1u << 7;
+constexpr std::uint32_t MaterialFlagSolidColor = 1u << 8;
 
 struct alignas(16) ObjectConstants {
 	DirectX::XMFLOAT4X4 World = dx::Identity4x4();
 	DirectX::XMFLOAT4X4 WorldInvTranspose = dx::Identity4x4();
+	DirectX::XMFLOAT4X4 PreviousWorld = dx::Identity4x4();
 };
 
 struct alignas(16) PassConstants {
@@ -64,6 +67,10 @@ struct alignas(16) PassConstants {
 	DirectX::XMFLOAT3 _pad3 = { 0.0f, 0.0f, 0.0f };
 
 	DirectX::XMFLOAT4 TessellationParams = { 0.75f, 3.0f, 1.0f, 6.0f }; // x=min dist, y=max dist, z=min factor, w=max factor
+	DirectX::XMFLOAT4X4 UnjitteredViewProj = dx::Identity4x4();
+	DirectX::XMFLOAT4X4 PreviousViewProj = dx::Identity4x4();
+	float PreviousTime = 0.0f;
+	DirectX::XMFLOAT3 _pad4 = { 0.0f, 0.0f, 0.0f };
 };
 
 struct alignas(16) MaterialConstants {
@@ -132,6 +139,9 @@ struct alignas(16) PostProcessConstants {
 	DirectX::XMFLOAT2 CameraNearFar = { 0.1f, 1000.0f };
 	float FisheyeStrength = 0.22f;
 	float FisheyeZoom = 1.08f;
+	std::uint32_t DebugVelocity = 0;
+	std::uint32_t CleanOutput = 0;
+	DirectX::XMFLOAT2 _pad = { 0.0f, 0.0f };
 };
 
 struct alignas(16) GpuParticle {
@@ -154,7 +164,13 @@ struct alignas(16) ParticleSimConstants {
 };
 
 static_assert(sizeof(ObjectConstants) % 16 == 0, "ObjectConstants must be 16-byte aligned sized.");
+static_assert(offsetof(ObjectConstants, PreviousWorld) == 128 && sizeof(ObjectConstants) == 192,
+	"ObjectCB layout must match the geometry and shadow shaders.");
 static_assert(sizeof(PassConstants) % 16 == 0, "PassConstants must be 16-byte aligned sized.");
+static_assert(offsetof(PassConstants, UnjitteredViewProj) == 208
+	&& offsetof(PassConstants, PreviousViewProj) == 272
+	&& offsetof(PassConstants, PreviousTime) == 336 && sizeof(PassConstants) == 352,
+	"PassCB temporal fields must match the HLSL constant-buffer layout.");
 static_assert(sizeof(MaterialConstants) % 16 == 0, "MaterialConstants must be 16-byte aligned sized.");
 static_assert(sizeof(DeferredPassConstants) % 16 == 0, "DeferredPassConstants must be 16-byte aligned sized.");
 static_assert(sizeof(PostProcessConstants) % 16 == 0, "PostProcessConstants must be 16-byte aligned sized.");

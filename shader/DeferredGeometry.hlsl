@@ -6,11 +6,13 @@ static const uint MATERIAL_FLAG_DISPLACEMENT_FROM_NORMAL = 1u << 4;
 static const uint MATERIAL_FLAG_USE_TESSELLATION = 1u << 5;
 static const uint MATERIAL_FLAG_PROCEDURAL_WATER = 1u << 6;
 static const uint MATERIAL_FLAG_LOD_DEBUG = 1u << 7;
+static const uint MATERIAL_FLAG_SOLID_COLOR = 1u << 8;
 
 cbuffer ObjectCB : register(b0)
 {
     float4x4 gWorld;
     float4x4 gWorldInvTranspose;
+    float4x4 gPreviousWorld;
 };
 
 cbuffer PassCB : register(b1)
@@ -37,6 +39,10 @@ cbuffer PassCB : register(b1)
     float3 _pad3;
 
     float4 gTessellationParams; // x=min dist, y=max dist, z=min factor, w=max factor
+    float4x4 gUnjitteredViewProj;
+    float4x4 gPreviousViewProj;
+    float gPreviousTime;
+    float3 _pad4;
 };
 
 cbuffer MaterialCB : register(b2)
@@ -73,6 +79,9 @@ struct ControlPointData
     float4 Color : COLOR0;
     float2 BaseTexC : TEXCOORD2;
     float3 TangentW : TEXCOORD3;
+    float3 PreviousPosW : TEXCOORD4;
+    float3 PreviousNormalW : TEXCOORD5;
+    float3 PreviousTangentW : TEXCOORD6;
 };
 
 struct GeometryPSInput
@@ -85,6 +94,8 @@ struct GeometryPSInput
     float3 TangentW : TEXCOORD3;
     float DebugDisplacement : TEXCOORD4;
     float DebugTessFactor : TEXCOORD5;
+    float4 CurrentClip : TEXCOORD6;
+    float4 PreviousClip : TEXCOORD7;
 };
 
 struct HSConstantData
@@ -98,6 +109,7 @@ struct GBufferOut
     float4 Albedo : SV_Target0;
     float4 Normal : SV_Target1;
     float4 PositionSpec : SV_Target2;
+    float2 Velocity : SV_Target3;
 };
 
 struct SurfaceDisplacementData
@@ -136,14 +148,14 @@ float2 ComputeMaterialUv(float2 baseTexC)
     return baseTexC * gMatUvTilingOffset.xy * gUvTiling + gMatUvTilingOffset.zw + gUvScroll;
 }
 
-float4 ApplyWind(float4 posW, float2 baseTexC)
+float4 ApplyWind(float4 posW, float2 baseTexC, float time)
 {
     if (gMatWindParams.x > 0.5f)
     {
         float2 windDir = normalize(float2(0.8f, 0.6f));
         float bendWeight = saturate(baseTexC.y);
 
-        float phase = gTime * gMatWindParams.w + dot(posW.xyz, float3(3.1f, 1.7f, 2.3f)) * gMatWindParams.z;
+        float phase = time * gMatWindParams.w + dot(posW.xyz, float3(3.1f, 1.7f, 2.3f)) * gMatWindParams.z;
         float gust = sin(phase) + 0.5f * sin(phase * 1.91f + 1.2f);
         float flutter = sin(phase * 2.7f + baseTexC.x * 6.2831853f) * 0.25f;
         float wind = (gust + flutter) * gMatWindParams.y * bendWeight;
@@ -156,12 +168,28 @@ float4 ApplyWind(float4 posW, float2 baseTexC)
     return posW;
 }
 
+float3 PreviousNormal(float3 normalL)
+{
+    // A cofactor matrix is the inverse transpose up to the determinant.
+    // Retaining its sign also handles mirrored object transforms.
+    float3x3 world = (float3x3)gPreviousWorld;
+    float3 c0 = cross(world[1], world[2]);
+    float3 c1 = cross(world[2], world[0]);
+    float3 c2 = cross(world[0], world[1]);
+    float determinant = dot(world[0], c0);
+    float3 transformed = mul(normalL, float3x3(c0, c1, c2));
+    transformed *= determinant < 0.0f ? -1.0f : 1.0f;
+    return SafeNormalize(transformed, float3(0.0f, 1.0f, 0.0f));
+}
+
 ControlPointData BuildControlPointData(VertexIn vin)
 {
     ControlPointData vout;
 
     float4 posW = mul(float4(vin.PosL, 1.0f), gWorld);
-    posW = ApplyWind(posW, vin.TexC);
+    posW = ApplyWind(posW, vin.TexC, gTime);
+    float4 previousPosW = mul(float4(vin.PosL, 1.0f), gPreviousWorld);
+    previousPosW = ApplyWind(previousPosW, vin.TexC, gPreviousTime);
 
     float3 normalW = mul(vin.NormalL, (float3x3)gWorldInvTranspose);
     normalW = SafeNormalize(normalW, float3(0.0f, 1.0f, 0.0f));
@@ -175,6 +203,11 @@ ControlPointData BuildControlPointData(VertexIn vin)
     vout.Color = vin.Color;
     vout.BaseTexC = vin.TexC;
     vout.TangentW = tangentW;
+    vout.PreviousPosW = previousPosW.xyz;
+    vout.PreviousNormalW = PreviousNormal(vin.NormalL);
+    float3 previousTangent = mul(vin.TangentL, (float3x3)gPreviousWorld);
+    previousTangent -= vout.PreviousNormalW * dot(previousTangent, vout.PreviousNormalW);
+    vout.PreviousTangentW = SafeNormalize(previousTangent, BuildFallbackTangent(vout.PreviousNormalW));
     return vout;
 }
 
@@ -223,7 +256,7 @@ bool MaterialUsesProceduralWater()
     return (gMatFlags & MATERIAL_FLAG_PROCEDURAL_WATER) != 0u && gMatWaterParams.x > 1e-5f;
 }
 
-float EvaluateWaterWave(float2 baseTexC, out float2 displacementGradient)
+float EvaluateWaterWave(float2 baseTexC, float time, out float2 displacementGradient)
 {
     displacementGradient = float2(0.0f, 0.0f);
     float waveHeight = 0.0f;
@@ -242,9 +275,9 @@ float EvaluateWaterWave(float2 baseTexC, out float2 displacementGradient)
         const float2 dir2 = normalize(float2(0.7f, -0.55f));
         const float tau = 6.2831853f;
 
-        float phase0 = dot(uv, dir0) * tau + gTime * speed * 1.15f;
-        float phase1 = dot(uv, dir1) * tau * 1.7f - gTime * speed * 1.55f + 1.2f;
-        float phase2 = dot(uv, dir2) * tau * 0.8f + gTime * speed * 0.6f - 0.75f;
+        float phase0 = dot(uv, dir0) * tau + time * speed * 1.15f;
+        float phase1 = dot(uv, dir1) * tau * 1.7f - time * speed * 1.55f + 1.2f;
+        float phase2 = dot(uv, dir2) * tau * 0.8f + time * speed * 0.6f - 0.75f;
 
         float s0;
         float c0;
@@ -268,7 +301,7 @@ float EvaluateWaterWave(float2 baseTexC, out float2 displacementGradient)
     return waveHeight;
 }
 
-SurfaceDisplacementData ApplySurfaceDisplacement(ControlPointData cp, float2 uv)
+SurfaceDisplacementData ApplySurfaceDisplacement(ControlPointData cp, float2 uv, float time)
 {
     SurfaceDisplacementData output;
     output.PosW = cp.PosW;
@@ -287,7 +320,7 @@ SurfaceDisplacementData ApplySurfaceDisplacement(ControlPointData cp, float2 uv)
     if (MaterialUsesProceduralWater())
     {
         float2 displacementGradient = float2(0.0f, 0.0f);
-        float waveHeight = EvaluateWaterWave(cp.BaseTexC, displacementGradient);
+        float waveHeight = EvaluateWaterWave(cp.BaseTexC, time, displacementGradient);
 
         float3 tangentW = output.TangentW - output.NormalW * dot(output.TangentW, output.NormalW);
         tangentW = SafeNormalize(tangentW, BuildFallbackTangent(output.NormalW));
@@ -333,6 +366,7 @@ float EdgeTessellationFactor(float3 p0, float3 p1)
 GeometryPSInput MakeGeometryOutput(
     ControlPointData cp,
     float3 displacedPosW,
+    float3 previousDisplacedPosW,
     float2 uv,
     float debugDisplacement,
     float debugTessFactor)
@@ -346,6 +380,8 @@ GeometryPSInput MakeGeometryOutput(
     vout.DebugDisplacement = debugDisplacement;
     vout.DebugTessFactor = debugTessFactor;
     vout.PosH = mul(float4(displacedPosW, 1.0f), gViewProj);
+    vout.CurrentClip = mul(float4(displacedPosW, 1.0f), gUnjitteredViewProj);
+    vout.PreviousClip = mul(float4(previousDisplacedPosW, 1.0f), gPreviousViewProj);
     return vout;
 }
 
@@ -355,7 +391,7 @@ GeometryPSInput VSBasic(VertexIn vin)
     float2 uv = ComputeMaterialUv(cp.BaseTexC);
     float debugDisplacement = SampleDebugDisplacement(uv);
     // Basic pipeline does not run tessellation, so keep the debug factor disabled.
-    return MakeGeometryOutput(cp, cp.PosW, uv, debugDisplacement, 0.0f);
+    return MakeGeometryOutput(cp, cp.PosW, cp.PreviousPosW, uv, debugDisplacement, 0.0f);
 }
 
 ControlPointData VSControlPoint(VertexIn vin)
@@ -411,6 +447,21 @@ GeometryPSInput DSMain(
         barycentrics.x * patch[0].PosW +
         barycentrics.y * patch[1].PosW +
         barycentrics.z * patch[2].PosW;
+    cp.PreviousPosW =
+        barycentrics.x * patch[0].PreviousPosW +
+        barycentrics.y * patch[1].PreviousPosW +
+        barycentrics.z * patch[2].PreviousPosW;
+    cp.PreviousNormalW = SafeNormalize(
+        barycentrics.x * patch[0].PreviousNormalW +
+        barycentrics.y * patch[1].PreviousNormalW +
+        barycentrics.z * patch[2].PreviousNormalW,
+        float3(0.0f, 1.0f, 0.0f));
+    cp.PreviousTangentW =
+        barycentrics.x * patch[0].PreviousTangentW +
+        barycentrics.y * patch[1].PreviousTangentW +
+        barycentrics.z * patch[2].PreviousTangentW;
+    cp.PreviousTangentW -= cp.PreviousNormalW * dot(cp.PreviousTangentW, cp.PreviousNormalW);
+    cp.PreviousTangentW = SafeNormalize(cp.PreviousTangentW, BuildFallbackTangent(cp.PreviousNormalW));
 
     cp.NormalW = SafeNormalize(
         barycentrics.x * patch[0].NormalW +
@@ -437,12 +488,17 @@ GeometryPSInput DSMain(
     cp.TangentW = SafeNormalize(cp.TangentW, BuildFallbackTangent(cp.NormalW));
 
     float2 uv = ComputeMaterialUv(cp.BaseTexC);
-    SurfaceDisplacementData surface = ApplySurfaceDisplacement(cp, uv);
+    SurfaceDisplacementData surface = ApplySurfaceDisplacement(cp, uv, gTime);
+    ControlPointData previousCp = cp;
+    previousCp.PosW = cp.PreviousPosW;
+    previousCp.NormalW = cp.PreviousNormalW;
+    previousCp.TangentW = cp.PreviousTangentW;
+    SurfaceDisplacementData previousSurface = ApplySurfaceDisplacement(previousCp, uv, gPreviousTime);
     float debugTessFactor = NormalizeDebugTessFactor(hsConstData.InsideTess);
 
     cp.NormalW = surface.NormalW;
     cp.TangentW = surface.TangentW;
-    return MakeGeometryOutput(cp, surface.PosW, uv, surface.DebugDisplacement, debugTessFactor);
+    return MakeGeometryOutput(cp, surface.PosW, previousSurface.PosW, uv, surface.DebugDisplacement, debugTessFactor);
 }
 
 GBufferOut PSGBuffer(GeometryPSInput pin)
@@ -468,7 +524,7 @@ GBufferOut PSGBuffer(GeometryPSInput pin)
     }
 
     float3 albedo = pin.Color.rgb * gMatDiffuseAlbedo.rgb * baseColorSample.rgb;
-    if ((gMatFlags & MATERIAL_FLAG_LOD_DEBUG) != 0u)
+    if ((gMatFlags & (MATERIAL_FLAG_LOD_DEBUG | MATERIAL_FLAG_SOLID_COLOR)) != 0u)
         albedo = gMatDiffuseAlbedo.rgb;
 
     float3 normalW = SafeNormalize(pin.NormalW, float3(0.0f, 1.0f, 0.0f));
@@ -489,6 +545,16 @@ GBufferOut PSGBuffer(GeometryPSInput pin)
     gout.Albedo = float4(albedo, saturate(pin.DebugTessFactor));
     gout.Normal = float4(normalW, saturate(pin.DebugDisplacement));
     gout.PositionSpec = float4(pin.PosW, max(gSpecPower, 1.0f));
+    // UV origin is top-left. Jitter is absent from both clips, so it never
+    // appears as surface motion. Resolve samples history at currentUV - velocity.
+    if (pin.CurrentClip.w > 1e-5f && pin.PreviousClip.w > 1e-5f) {
+        float2 currentNdc = pin.CurrentClip.xy / pin.CurrentClip.w;
+        float2 previousNdc = pin.PreviousClip.xy / pin.PreviousClip.w;
+        gout.Velocity = (currentNdc - previousNdc) * float2(0.5f, -0.5f);
+    }
+    else {
+        gout.Velocity = float2(2.0f, 2.0f); // Invalid previous projection: reject history.
+    }
     return gout;
 }
 

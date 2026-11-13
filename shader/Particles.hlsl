@@ -43,6 +43,10 @@ cbuffer PassCB : register(b1)
     float3 _pad3;
 
     float4 gTessellationParams;
+    float4x4 gUnjitteredViewProj;
+    float4x4 gPreviousViewProj;
+    float gPreviousTime;
+    float3 _pad4;
 };
 
 cbuffer ParticleSortCB : register(b2)

@@ -717,7 +717,8 @@ ObjectConstants MakeObjectConstantsFromWorld(DirectX::FXMMATRIX world)
 {
 	ObjectConstants obj = {};
 	DirectX::XMStoreFloat4x4(&obj.World, DirectX::XMMatrixTranspose(world));
-	DirectX::XMStoreFloat4x4(&obj.WorldInvTranspose, DirectX::XMMatrixTranspose(DirectX::XMMatrixInverse(nullptr, world)));
+	obj.PreviousWorld = obj.World;
+	DirectX::XMStoreFloat4x4(&obj.WorldInvTranspose, DirectX::XMMatrixInverse(nullptr, world));
 	return obj;
 }
 
@@ -1430,6 +1431,7 @@ LRESULT Framework::MsgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 		{
 			if (vk == VK_F1) {
 				m_showBufferDebug = !m_showBufferDebug;
+				ResetTemporalHistory();
 				UpdateWindowTitle();
 			}
 			else if (vk == VK_F2)
@@ -1457,16 +1459,19 @@ LRESULT Framework::MsgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			else if (vk == VK_F5)
 			{
 				m_enableLocalLights = !m_enableLocalLights;
+				ResetTemporalHistory();
 				UpdateWindowTitle();
 			}
 			else if (!m_terrain.Empty() && vk == VK_F6) {
 				m_terrainLodColors = !m_terrainLodColors;
+				ResetTemporalHistory();
 			}
 			else if (!m_terrain.Empty() && vk == VK_F7) {
 				m_terrainFreeze = !m_terrainFreeze;
 			}
 			else if (!m_terrain.Empty() && vk == VK_F8) {
 				m_terrainWireframe = !m_terrainWireframe;
+				ResetTemporalHistory();
 			}
 			else if (!m_terrain.Empty() && (vk == VK_ADD || vk == VK_OEM_PLUS)) {
 				m_terrainPixelError = (std::max)(0.5f, m_terrainPixelError * 0.5f);
@@ -1475,6 +1480,18 @@ LRESULT Framework::MsgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			else if (!m_terrain.Empty() && (vk == VK_SUBTRACT || vk == VK_OEM_MINUS)) {
 				m_terrainPixelError = (std::min)(32.0f, m_terrainPixelError * 2.0f);
 				m_terrainFreeze = false;
+			}
+			else if (vk == 'T' || vk == 'V' || vk == 'R' || vk == 'C') {
+				if (vk == 'T') m_taaEnabled = !m_taaEnabled;
+				if (vk == 'V') m_taaShowVelocity = !m_taaShowVelocity;
+				if (vk == 'R') m_taaReprojection = !m_taaReprojection;
+				if (vk == 'C') m_taaClamping = !m_taaClamping;
+				ResetTemporalHistory();
+				UpdateWindowTitle();
+			}
+			else if (vk == 'P') {
+				m_animationPaused = !m_animationPaused;
+				UpdateWindowTitle();
 			}
 			else if (vk == VK_HOME) {
 				ResetCameraForCurrentScene();
@@ -1619,6 +1636,7 @@ void Framework::OnResize()
 		m_rtvDescriptorSize);
 
 	BuildPostProcessResources();
+	BuildTemporalResources();
 
 	ThrowIfFailed(m_commandList->Close());
 	ID3D12CommandList* cmdsLists[] = { m_commandList.Get() };
@@ -1646,8 +1664,10 @@ void Framework::Update(const double& dt)
 		? nullptr
 		: &m_sceneDefinitions[m_currentSceneIndex];
 
-	m_uvAnimation.x += m_uvAnimationSpeed.x * static_cast<float>(dt);
-	m_uvAnimation.y += m_uvAnimationSpeed.y * static_cast<float>(dt);
+	const float animationDt = m_animationPaused ? 0.0f : static_cast<float>(dt);
+	m_animationTime += animationDt;
+	m_uvAnimation.x += m_uvAnimationSpeed.x * animationDt;
+	m_uvAnimation.y += m_uvAnimationSpeed.y * animationDt;
 
 	m_uvAnimation.x -= std::floor(m_uvAnimation.x);
 	m_uvAnimation.y -= std::floor(m_uvAnimation.y);
@@ -1687,14 +1707,36 @@ void Framework::Update(const double& dt)
 	float aspect = (float)m_clientWidth / (float)m_clientHeight;
 	XMMATRIX proj = XMMatrixPerspectiveFovLH(CameraFovY, aspect, CameraNearZ, CameraFarZ);
 
-	XMMATRIX viewProj = view * proj;
+	const XMMATRIX unjitteredViewProj = view * proj;
+	const XMVECTOR cameraForward = XMVector3Normalize(target - pos);
+	if (m_previousFrameValid &&
+		(XMVectorGetX(XMVector3Length(pos - XMLoadFloat3(&m_previousCameraPos))) > 5.0f ||
+		 XMVectorGetX(XMVector3Dot(cameraForward, XMLoadFloat3(&m_previousCameraForward))) < 0.5f)) {
+		ResetTemporalHistory();
+	}
+	XMStoreFloat4x4(&m_currentUnjitteredViewProj, XMMatrixTranspose(unjitteredViewProj));
+	m_taaJitter = taa::Jitter(m_taaFrameIndex, m_clientWidth, m_clientHeight, m_taaEnabled);
+	XMFLOAT4X4 jitteredProjection;
+	XMStoreFloat4x4(&jitteredProjection, proj);
+	jitteredProjection._31 += 2.0f * m_taaJitter.UV.x;
+	jitteredProjection._32 -= 2.0f * m_taaJitter.UV.y;
+	const XMMATRIX viewProj = view * XMLoadFloat4x4(&jitteredProjection);
+	UpdateTaaDemoObjects();
 	UpdateDynamicSceneObjects();
-	UpdateVisibleObjects(viewProj);
-	UpdateTerrain(viewProj);
+	for (UINT i = 0; i < static_cast<UINT>(m_sceneObjects.size()); ++i) {
+		auto& constants = m_sceneObjects[i].Constants;
+		if (!m_previousFrameValid) constants.PreviousWorld = constants.World;
+		m_objectCB->CopyData(i, constants);
+	}
+	UpdateVisibleObjects(unjitteredViewProj);
+	UpdateTerrain(unjitteredViewProj);
 	UpdateCascadedShadowMaps(view);
 
 	PassConstants pass{};
 	XMStoreFloat4x4(&pass.ViewProj, XMMatrixTranspose(viewProj));
+	pass.UnjitteredViewProj = m_currentUnjitteredViewProj;
+	pass.PreviousViewProj = m_previousFrameValid ? m_previousViewProj : m_currentUnjitteredViewProj;
+	pass.PreviousTime = m_previousFrameValid ? m_previousAnimationTime : m_animationTime;
 
 	XMStoreFloat3(&pass.EyePosW, pos);
 
@@ -1726,7 +1768,7 @@ void Framework::Update(const double& dt)
 		pass.UvScroll = m_uvAnimation;
 		pass.UvTiling = m_uvGlobalTiling;
 	}
-	pass.Time = static_cast<float>(m_timer.TotalTime());
+	pass.Time = m_animationTime;
 	pass.TessellationParams = {
 		m_tessellationMinDistance,
 		m_tessellationMaxDistance,
@@ -1771,7 +1813,7 @@ void Framework::Update(const double& dt)
 		m_directionalLightSB->CopyData(i, m_directionalLights[i]);
 	}
 
-	const float time = static_cast<float>(m_timer.TotalTime());
+	const float time = m_animationTime;
 	for (UINT i = 0; i < pointCount; ++i)
 	{
 		GpuPointLight light = m_pointLights[i];
@@ -1806,7 +1848,7 @@ void Framework::Update(const double& dt)
 		post.FocusDistance = focusDistance;
 		post.FocusRange = (std::max)(1.25f, focusDistance * 0.42f);
 		post.MaxDofBlur = m_showBufferDebug ? 0.0f : 0.82f;
-		post.Time = static_cast<float>(m_timer.TotalTime());
+		post.Time = m_animationTime;
 		post.VignetteStrength = m_showBufferDebug ? 0.0f : 0.20f;
 		post.ChromaticAberration = m_showBufferDebug ? 0.0f : 1.10f;
 		post.GrainStrength = m_showBufferDebug ? 0.0f : 0.008f;
@@ -1823,10 +1865,17 @@ void Framework::Update(const double& dt)
 			post.GrainStrength = 0.0f;
 			post.BloomStrength = m_terrainLodColors || m_terrainWireframe ? 0.0f : 0.18f;
 		}
+		post.DebugVelocity = m_taaShowVelocity ? 1u : 0u;
+		post.CleanOutput = scene && scene->EnableTaaDemo ? 1u : 0u;
+		if (post.CleanOutput) {
+			post.MaxDofBlur = post.FisheyeStrength = post.ChromaticAberration = 0.0f;
+			post.GrainStrength = post.BloomStrength = post.VignetteStrength = 0.0f;
+			post.FisheyeZoom = 1.0f;
+		}
 		m_postProcessCB->CopyData(0, post);
 	}
 
-	UpdateParticleSimConstants(dt);
+	UpdateParticleSimConstants(animationDt);
 	UpdateWindowTitle();
 }
 
@@ -1862,7 +1911,9 @@ void Framework::UpdateDynamicSceneObjects()
 			XMMatrixRotationY(yaw) *
 			XMMatrixTranslation(sceneObject.Anchor.x, sceneObject.Anchor.y, sceneObject.Anchor.z);
 
+		const auto previousWorld = sceneObject.Constants.PreviousWorld;
 		sceneObject.Constants = MakeObjectConstantsFromWorld(world);
+		sceneObject.Constants.PreviousWorld = previousWorld;
 		m_objectCB->CopyData(objectIndex, sceneObject.Constants);
 	}
 }
@@ -1878,7 +1929,7 @@ void Framework::Draw()
 	ID3D12DescriptorHeap* heaps[] = { m_cbvHeap.Get() };
 	m_commandList->SetDescriptorHeaps(_countof(heaps), heaps);
 
-	if (m_terrain.Empty()) {
+	if (m_terrain.Empty() && !m_sceneDefinitions[m_currentSceneIndex].EnableTaaDemo && !m_taaShowVelocity) {
 		SimulateParticles();
 		SortParticlesOnGpu();
 	}
@@ -2070,6 +2121,8 @@ void Framework::Draw()
 	m_commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 	m_commandList->DrawInstanced(3, 1, 0, 0);
 
+	RunTemporalAA();
+
 	D3D12_RESOURCE_BARRIER depthToWrite{};
 	depthToWrite.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
 	depthToWrite.Transition.pResource = m_depthStencilBuffer.Get();
@@ -2078,7 +2131,7 @@ void Framework::Draw()
 	depthToWrite.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
 	m_commandList->ResourceBarrier(1, &depthToWrite);
 
-	if (!m_visibleTransparentObjectIndices.empty() && m_boxVB && m_boxIB)
+	if (!m_taaShowVelocity && !m_visibleTransparentObjectIndices.empty() && m_boxVB && m_boxIB)
 	{
 		const D3D12_CPU_DESCRIPTOR_HANDLE depthView = DepthStencilView();
 		m_commandList->OMSetRenderTargets(1, &hdrSceneRtv, TRUE, &depthView);
@@ -2110,7 +2163,7 @@ void Framework::Draw()
 	{
 		const D3D12_CPU_DESCRIPTOR_HANDLE depthView = DepthStencilView();
 		m_commandList->OMSetRenderTargets(1, &hdrSceneRtv, TRUE, &depthView);
-		if (m_terrain.Empty()) {
+		if (m_terrain.Empty() && !m_sceneDefinitions[m_currentSceneIndex].EnableTaaDemo && !m_taaShowVelocity) {
 			DrawTransparentParticles();
 		}
 	}
@@ -2154,6 +2207,7 @@ void Framework::Draw()
 	m_currBackBuffer = static_cast<int>(m_swapChain->GetCurrentBackBufferIndex());
 
 	FlushCommandQueue();
+	FinishTemporalFrame();
 }
 
 
@@ -2393,6 +2447,7 @@ void Framework::BuildConstantBuffers()
 	m_passCB = std::make_unique<UploadBuffer<PassConstants>>(m_device.Get(), 1, true);
 	m_deferredPassCB = std::make_unique<UploadBuffer<DeferredPassConstants>>(m_device.Get(), 1, true);
 	m_postProcessCB = std::make_unique<UploadBuffer<PostProcessConstants>>(m_device.Get(), 1, true);
+	m_taaCB = std::make_unique<UploadBuffer<TemporalAAConstants>>(m_device.Get(), 1, true);
 	m_shadowPassCB = std::make_unique<UploadBuffer<PassConstants>>(m_device.Get(), ShadowCascadeCount, true);
 	m_directionalLightSB = std::make_unique<UploadBuffer<GpuDirectionalLight>>(m_device.Get(), MaxDirectionalLights, false);
 	m_pointLightSB = std::make_unique<UploadBuffer<GpuPointLight>>(m_device.Get(), MaxPointLights, false);
@@ -2419,9 +2474,10 @@ void Framework::BuildCbvHeap()
 	m_particleSortSrvIndex = m_particleSrvBaseIndex + ParticleBufferCount * 2;
 	m_postProcessSrvBaseIndex = m_particleSortSrvIndex + 1;
 	m_postProcessFinalSrvBaseIndex = m_postProcessSrvBaseIndex + PostProcessTextureCount;
+	m_taaSrvBaseIndex = m_postProcessFinalSrvBaseIndex + 3;
 
 	D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
-	heapDesc.NumDescriptors = m_postProcessFinalSrvBaseIndex + 3;
+	heapDesc.NumDescriptors = m_taaSrvBaseIndex + 8;
 	heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
 	heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
 
@@ -2548,6 +2604,7 @@ void Framework::BuildCbvViews()
 	}
 
 	CreatePostProcessSrvDescriptors();
+	CreateTemporalDescriptors();
 
 	BuildParticleDescriptors();
 }
@@ -3085,7 +3142,7 @@ void Framework::UpdateCascadedShadowMaps(const DirectX::XMMATRIX& view)
 		shadowPass.SpecPower = scene ? scene->ForwardSpecPower : 32.0f;
 		shadowPass.UvScroll = scene && scene->EnableUvScroll ? m_uvAnimation : DirectX::XMFLOAT2{ 0.0f, 0.0f };
 		shadowPass.UvTiling = scene ? scene->GlobalUvTiling : m_uvGlobalTiling;
-		shadowPass.Time = static_cast<float>(m_timer.TotalTime());
+		shadowPass.Time = m_animationTime;
 		shadowPass.TessellationParams = {
 			m_tessellationMinDistance,
 			m_tessellationMaxDistance,
@@ -3647,7 +3704,7 @@ void Framework::UpdateParticleSimConstants(double dt)
 
 	ParticleSimConstants sim = {};
 	sim.DeltaTime = (std::min)(static_cast<float>(dt), 0.05f);
-	sim.TotalTime = static_cast<float>(m_timer.TotalTime());
+	sim.TotalTime = m_animationTime;
 	sim.MaxParticles = MaxParticles;
 	sim.Acceleration = { 0.0f, -0.10f, 0.0f, 0.0f };
 
@@ -4004,6 +4061,20 @@ void Framework::InitializeSceneDefinitions()
 	landscape.DeferredAmbientIntensity = 0.30f;
 	landscape.DeferredAmbientColor = { 0.80f, 0.90f, 1.0f, 1.0f };
 	m_sceneDefinitions.push_back(landscape);
+
+	SceneDefinition temporal = {};
+	temporal.Name = L"TAA Lab";
+	temporal.Format = SceneAssetFormat::Procedural;
+	temporal.EnableTaaDemo = true;
+	temporal.CameraPos = { 7.0f, 4.0f, -12.0f };
+	temporal.CameraTarget = { 0.0f, 1.0f, 2.0f };
+	temporal.CameraMoveSpeed = 3.0f;
+	temporal.EnableUvScroll = false;
+	temporal.EnableWindAnimation = false;
+	temporal.LightingPreset = SceneLightingPreset::SanMiguel;
+	temporal.DeferredAmbientIntensity = 0.35f;
+	temporal.ScatterFieldHalfExtents = { 7.0f, 5.0f, 8.0f };
+	m_sceneDefinitions.push_back(temporal);
 }
 
 void Framework::LoadScene(size_t sceneIndex, bool resetCamera)
@@ -4013,6 +4084,8 @@ void Framework::LoadScene(size_t sceneIndex, bool resetCamera)
 	}
 
 	m_currentSceneIndex = sceneIndex;
+	m_animationTime = 0.0f;
+	ResetTemporalHistory();
 
 	const SceneDefinition& scene = m_sceneDefinitions[m_currentSceneIndex];
 	m_cameraMoveSpeed = scene.CameraMoveSpeed;
@@ -4037,6 +4110,7 @@ void Framework::LoadScene(size_t sceneIndex, bool resetCamera)
 
 void Framework::ResetCameraForCurrentScene()
 {
+	ResetTemporalHistory();
 	if (m_sceneDefinitions.empty()) {
 		return;
 	}
@@ -4066,6 +4140,17 @@ void Framework::UpdateWindowTitle() const
 	}
 
 	std::wstring title = m_title ? m_title : L"DX12 Scene Renderer";
+	title += m_taaEnabled ? L" | TAA:On" : L" | TAA:Off";
+	title += L" Hist:" + std::to_wstring(m_taaHistoryFrames);
+	title += m_taaReprojection ? L" Reproj:On" : L" Reproj:Off";
+	title += m_taaClamping ? L" Clamp:On" : L" Clamp:Off";
+	title += m_taaShowVelocity ? L" Motion:On" : L" Motion:Off";
+	title += m_animationPaused ? L" Anim:Pause" : L" Anim:Play";
+	if (!m_sceneDefinitions.empty() && m_sceneDefinitions[m_currentSceneIndex].EnableTaaDemo) {
+		title += L" | TAA Lab | T TAA | V motion | R reprojection | C clamp | P pause | Home reset | 1-6 scenes";
+		SetWindowTextW(MainWnd(), title.c_str());
+		return;
+	}
 	if (!m_terrain.Empty()) {
 		const auto& stats = m_terrain.Statistics();
 		title += L" | Terrain | patches " + std::to_wstring(stats.SelectedPatches);
@@ -4126,6 +4211,12 @@ void Framework::BuildSceneObjects()
 	}
 
 	const SceneDefinition& scene = m_sceneDefinitions[m_currentSceneIndex];
+
+	m_taaDemoMovingObject = UINT_MAX;
+	if (scene.EnableTaaDemo) {
+		BuildTaaDemoObjects();
+		return;
+	}
 
 	if (!m_terrain.Empty()) {
 		SceneObject terrainObject = {};
@@ -4542,7 +4633,7 @@ void Framework::UpdateVisibleObjects(const DirectX::XMMATRIX& viewProj)
 	{
 		const std::array<DirectX::XMFLOAT4, 6> frustumPlanes = ExtractFrustumPlanes(viewProj);
 
-		if (m_useOctreeForCulling && !m_octreeNodes.empty())
+		if (m_useOctreeForCulling && !scene.EnableTaaDemo && !m_octreeNodes.empty())
 		{
 			auto AppendNodeSubtree = [&](auto&& self, int nodeIndex) -> void
 			{
@@ -6528,7 +6619,7 @@ void Framework::BuildSceneGeometryUpload()
 	}
 	else if (vertices.empty())
 	{
-		if (!scene.EnableScatterField) {
+		if (!scene.EnableScatterField && !scene.EnableTaaDemo) {
 			throw std::runtime_error("Scene loaded but produced 0 vertices.");
 		}
 

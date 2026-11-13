@@ -28,6 +28,7 @@ DXGI_FORMAT Gbuffer::TargetFormat(UINT index) const
 	case 0: return kAlbedoFormat;
 	case 1: return kNormalFormat;
 	case 2: return kPositionSpecFormat;
+	case 3: return kVelocityFormat;
 	default: return DXGI_FORMAT_UNKNOWN;
 	}
 }
@@ -187,6 +188,7 @@ void Gbuffer::Clear(ID3D12GraphicsCommandList* commandList) const
 	{
 		{ 0.0f, 0.0f, 0.0f, 0.0f },
 		{ 0.0f, 0.0f, 1.0f, 0.0f },
+		{ 0.0f, 0.0f, 0.0f, 0.0f },
 		{ 0.0f, 0.0f, 0.0f, 0.0f }
 	};
 
@@ -200,7 +202,8 @@ void Gbuffer::BindAsRenderTargets(ID3D12GraphicsCommandList* commandList, D3D12_
 	std::array<D3D12_CPU_DESCRIPTOR_HANDLE, kTargetCount> rtvs = {
 		RtvHandle(0),
 		RtvHandle(1),
-		RtvHandle(2)
+		RtvHandle(2),
+		RtvHandle(3)
 	};
 
 	commandList->OMSetRenderTargets(

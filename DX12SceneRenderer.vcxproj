@@ -134,6 +134,8 @@
     <ClCompile Include="src\Terrain.cpp" />
     <ClCompile Include="src\TerrainRendering.cpp" />
     <ClCompile Include="src\FrameCapture.cpp" />
+    <ClCompile Include="src\TemporalRendering.cpp" />
+    <ClCompile Include="src\TemporalDemo.cpp" />
     <ClCompile Include="src\Gbuffer.cpp" />
     <ClCompile Include="src\RenderingSystem.cpp" />
     <ClCompile Include="src\Timer.cpp" />
@@ -145,6 +147,7 @@
     <ClInclude Include="include\Dx12Common.hpp" />
     <ClInclude Include="include\Framework.hpp" />
     <ClInclude Include="include\Terrain.hpp" />
+    <ClInclude Include="include\TemporalAA.hpp" />
     <ClInclude Include="include\Gbuffer.hpp" />
     <ClInclude Include="include\RenderStructs.hpp" />
     <ClInclude Include="include\RenderingSystem.hpp" />
@@ -155,6 +158,7 @@
     <ClInclude Include="include\Window.hpp" />
   </ItemGroup>
   <ItemGroup>
+    <None Include="shader\TemporalAA.hlsl" />
     <None Include="shader\DeferredGeometry.hlsl">
       <DisableOptimizations Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</DisableOptimizations>
       <EnableDebuggingInformation Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</EnableDebuggingInformation>
