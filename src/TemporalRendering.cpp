@@ -84,6 +84,7 @@ void Framework::CreateTemporalDescriptors()
 
 void Framework::RunTemporalAA()
 {
+    if (IsRayTracedShadowScene() && m_rtShadowMask) return;
     if (!m_taaEnabled && !m_taaShowVelocity) return;
     TemporalAAConstants constants = {};
     constants.InvResolution = { 1.0f / m_clientWidth, 1.0f / m_clientHeight };

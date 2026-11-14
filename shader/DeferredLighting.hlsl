@@ -32,6 +32,9 @@ cbuffer DeferredPassCB : register(b0)
     uint gPointLightCount;
     uint gSpotLightCount;
     uint gDebugViewEnabled;
+    uint gRayTracedShadowsEnabled;
+    uint gRayTracedShadowMask;
+    uint2 gShadowPadding;
 };
 
 Texture2D gAlbedoTex : register(t0);
@@ -43,6 +46,7 @@ StructuredBuffer<DirectionalLight> gDirectionalLights : register(t5);
 StructuredBuffer<PointLight> gPointLights : register(t6);
 StructuredBuffer<SpotLight> gSpotLights : register(t7);
 Texture2DArray<float> gShadowMap : register(t8);
+Texture2D<float2> gRayTracedShadow : register(t9);
 SamplerState gSamPointClamp : register(s0);
 SamplerComparisonState gSamShadowCmp : register(s1);
 
@@ -254,7 +258,7 @@ float ComputeDirectionalShadow(float3 posW)
     return visibility;
 }
 
-float3 EvaluateSceneLighting(float3 albedo, float3 normalW, float3 posW, float specPower)
+float3 EvaluateSceneLighting(float3 albedo, float3 normalW, float3 posW, float specPower, float2 uv)
 {
     float3 viewVec = gEyePosW - posW;
     float viewLen2 = dot(viewVec, viewVec);
@@ -266,6 +270,8 @@ float3 EvaluateSceneLighting(float3 albedo, float3 normalW, float3 posW, float s
     for (uint dirIndex = 0; dirIndex < gDirectionalLightCount; ++dirIndex)
     {
         float shadowVisibility = (dirIndex == 0u) ? ComputeDirectionalShadow(posW) : 1.0f;
+        if (dirIndex == 0u && gRayTracedShadowsEnabled != 0u)
+            shadowVisibility = gRayTracedShadow.SampleLevel(gSamPointClamp, uv, 0).x;
         color += shadowVisibility * EvaluateDirectional(gDirectionalLights[dirIndex], albedo, normalW, viewDir, specPower);
     }
 
@@ -599,7 +605,7 @@ float3 SampleDebugPanel(uint tileX, uint tileY, float2 panelUv, out uint labelId
     float specPower = max(positionSpec.w, 1.0f);
     float depth = saturate(gDepthTex.Sample(gSamPointClamp, panelUv));
     float3 posW = ReconstructWorldPos(panelUv, depth);
-    float3 litColor = EvaluateSceneLighting(albedo, normalW, posW, specPower);
+    float3 litColor = EvaluateSceneLighting(albedo, normalW, posW, specPower, panelUv);
 
     float3 panel = depth.xxx;
     labelId = LABEL_DEPTH;
@@ -619,6 +625,8 @@ float3 SampleDebugPanel(uint tileX, uint tileY, float2 panelUv, out uint labelId
 
 float4 PSLighting(FullscreenOut pin) : SV_Target
 {
+    if (gRayTracedShadowMask != 0u)
+        return float4(gRayTracedShadow.SampleLevel(gSamPointClamp, pin.TexC, 0).xxx, 1);
     float3 albedo = gAlbedoTex.Sample(gSamPointClamp, pin.TexC).rgb;
     float3 normalW = gNormalTex.Sample(gSamPointClamp, pin.TexC).xyz;
     float specPower = max(gPositionSpecTex.Sample(gSamPointClamp, pin.TexC).w, 1.0f);
@@ -626,7 +634,7 @@ float4 PSLighting(FullscreenOut pin) : SV_Target
     float3 posW = ReconstructWorldPos(pin.TexC, saturate(depth));
 
     normalW = NormalizeNormalForLighting(normalW);
-    float3 color = EvaluateSceneLighting(albedo, normalW, posW, specPower);
+    float3 color = EvaluateSceneLighting(albedo, normalW, posW, specPower, pin.TexC);
 
     if (gDebugViewEnabled != 0u)
     {

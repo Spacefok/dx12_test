@@ -7,9 +7,10 @@ A Windows-focused DirectX 12 renderer written in C++17 for experimenting with re
 - Deferred lighting pipeline with a G-buffer pass and fullscreen lighting pass
 - Adaptive tessellation and displacement-aware materials
 - OBJ and FBX scene loading via bundled `tinyobjloader` and `ufbx`
-- Seven demo scenes: `Sponza`, `Bistro`, `San Miguel`, procedural `Culling Lab`, `Terrain`, `TAA Lab`, and `Atmosphere Lab`
+- Eight demo scenes: `Sponza`, `Bistro`, `San Miguel`, procedural `Culling Lab`, `Terrain`, `TAA Lab`, `Atmosphere Lab`, and `RT Shadows Lab`
 - Native-resolution temporal anti-aliasing with Halton jitter, motion vectors, and neighborhood history clamping
 - Single-scattering Rayleigh/Mie atmosphere with sky and depth-limited aerial perspective
+- Inline ray-traced hard and soft shadows with a refittable TLAS and edge-aware denoising
 - Frustum culling, octree culling, and occlusion culling toggles for side-by-side comparison
 - Procedural water surface, scatter-field props, and tree billboard LODs
 - Tiled heightmap terrain with quadtree LOD, screen-space error selection, and frustum culling
@@ -20,7 +21,7 @@ A Windows-focused DirectX 12 renderer written in C++17 for experimenting with re
 - `Space` / `Ctrl` move up and down
 - `Shift` boosts camera speed
 - Hold RMB and move the mouse to look around
-- `1`-`7` switch scenes (`5` selects Terrain, `6` TAA Lab, `7` Atmosphere Lab)
+- `1`-`8` switch scenes (`5` selects Terrain, `6` TAA Lab, `7` Atmosphere Lab, `8` RT Shadows Lab)
 - `Home` resets the current scene's camera
 - `F1` toggles G-buffer debug view
 - `F2` toggles frustum culling
@@ -44,7 +45,7 @@ Requirements:
 
 - Windows 10/11
 - Visual Studio 2022 with MSVC v143
-- Windows 10 SDK
+- Recent Windows 10/11 SDK including DXC (Shader Model 6.5)
 - A DirectX 12 capable GPU
 
 Build steps:
@@ -52,6 +53,54 @@ Build steps:
 1. Open `DX12SceneRenderer.sln` in Visual Studio 2022.
 2. Select `x64` and either `Debug` or `Release`.
 3. Build and run from the repository root so relative `assets/` and `shader/` paths resolve correctly.
+
+The build compiles the RT compute shader with the SDK's DXC into intermediate
+headers embedded in the executable. No extra compiler DLL is needed at runtime.
+RT Shadows Lab requires DXR Tier 1.1 and Shader Model 6.5. Other scenes keep
+their existing shadow maps; an unsupported adapter is reported in the title.
+
+## RT Shadows Demo
+
+~~~powershell
+.\x64\Debug\DX12SceneRenderer.exe --rt-shadows
+~~~
+
+The scene starts paused with soft shadows, an angular light radius of 3 degrees,
+8 stochastic samples per pixel, spatial filtering, and TAA. A separate central
+ray also measures the blocker distance. All geometry is opaque and shares
+one indexed box BLAS. The TLAS contains every instance, including the box outside
+the initial camera frustum, and is refitted from current transforms each frame.
+
+| Key | Action |
+| --- | --- |
+| `F6` | Cycle soft / off / hard shadows |
+| `F7` | Show the visibility mask without TAA or tone mapping |
+| `F8` | Toggle spatial filtering |
+| `[` / `]` | Decrease / increase light angular radius, from 0 to 8 degrees |
+| `N` | Cycle 1 / 4 / 8 / 16 rays per pixel |
+| `O` | Lower / raise the blue plate to compare contact and distant shadows |
+| `B` | Move the offscreen caster away / back |
+| `P` | Animate / pause the moving box |
+| `T` | Toggle TAA; use with `F8` to compare raw noise and denoising |
+| `8` | Reload the demonstration defaults |
+
+Each visible surface sends shadow rays through an angular disk around a single
+directional light. Unblocked-ray fraction modulates only that light's direct
+diffuse/specular contribution. Ambient lighting stays unchanged. A normal offset
+and minimum ray distance reduce self-intersections. The closest blocker distance
+and angular radius estimate the penumbra footprint used by a small spatial filter.
+Normal and plane-distance checks reject samples on other surfaces.
+
+At zero angular radius, soft mode produces the exact hard visibility mask.
+Increasing the radius or lifting the plate broadens its penumbra. The `B` comparison
+demonstrates that camera culling does not remove shadow casters. During caster
+animation, temporal lighting history is rejected because surface motion vectors
+do not describe a moving shadow on a stationary receiver; spatial denoising remains.
+
+Start reading at `shader/RayTracedShadows.hlsl`, `src/RayTracedShadows.cpp`,
+and `src/RayTracedShadowRendering.cpp`. This laboratory traces the procedural
+opaque scene only; imported alpha-tested, displaced, and transparent geometry
+continues using the existing rendering path.
 
 ## Atmosphere Demo
 
@@ -147,18 +196,6 @@ Changing the error threshold, toggling frustum culling, or resetting the camera
 also resumes live terrain selection. Octree and occlusion toggles apply to the
 other scene objects; terrain visibility uses its own quadtree traversal.
 
-## Scene Assets
-
-The repository keeps runtime-ready textures and scene metadata in git, but treats large DCC source files as local-only by default. In particular, the Bistro `.fbx` meshes are ignored so they do not bloat day-to-day commits or make the repository page look like an asset dump.
-
-If you want to publish those large source assets, prefer one of these approaches:
-
-- store them with Git LFS
-- attach them to GitHub Releases
-- document an external download step in this README
-
-Asset-specific attribution and license files are kept next to the corresponding asset packs under `assets/`.
-
 ## Repository Layout
 
 - `src/` application code, scene loading, camera logic, and render orchestration
@@ -166,7 +203,3 @@ Asset-specific attribution and license files are kept next to the corresponding 
 - `shader/` HLSL programs for geometry and lighting passes
 - `assets/` packaged demo scenes, textures, and asset metadata
 - `tools/` standalone asset generation utilities
-
-## Notes
-
-The renderer ships with large demo assets, so if you later decide to publish source DCC files as well, prefer Git LFS or GitHub Releases instead of regular git history.

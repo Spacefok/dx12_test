@@ -20,6 +20,7 @@
 #include "Terrain.hpp"
 #include "TemporalAA.hpp"
 #include "Atmosphere.hpp"
+#include "RayTracedShadows.hpp"
 
 class Framework : public IWindowMessageHandler {
 public:
@@ -155,6 +156,21 @@ private:
 	float m_sunAzimuth = -0.436332313f;
 	float m_sunElevation = 0.314159265f;
 
+	RayTracedShadows m_rtShadows;
+	RayTracedShadowConstants m_rtShadowSettings = {};
+	UINT m_rtShadowSrvIndex = 0;
+	UINT m_rtShadowMode = 2;
+	UINT m_rtShadowSamples = 8;
+	UINT m_rtShadowFrame = 0;
+	float m_rtLightRadius = 3.0f;
+	float m_rtBlockerHeight = 3.0f;
+	bool m_rtShadowFilter = true;
+	bool m_rtShadowMask = false;
+	bool m_rtOffscreenCaster = true;
+	UINT m_rtMovingObject = UINT_MAX;
+	UINT m_rtRaisedObject = UINT_MAX;
+	UINT m_rtOffscreenObject = UINT_MAX;
+
 	DXGI_FORMAT m_depthStencilFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;
 	DXGI_FORMAT m_depthStencilResourceFormat = DXGI_FORMAT_R24G8_TYPELESS;
 	DXGI_FORMAT m_depthStencilSrvFormat = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
@@ -266,6 +282,12 @@ private:
 	void UpdateAtmosphereSun(float dt);
 	bool HandleAtmosphereKey(UINT key);
 	void BuildAtmosphereDemoObjects();
+	void BuildRayTracedShadowDemoObjects();
+	void UpdateRayTracedShadowDemoObjects();
+	bool HandleRayTracedShadowKey(UINT key);
+	bool IsRayTracedShadowScene() const;
+	void RunRayTracedShadows();
+	void CreateRayTracedShadowDescriptor();
 	void UpdateCascadedShadowMaps(const DirectX::XMMATRIX& view);
 	void RenderSceneToShadowMap();
 	void BuildRootSignature();
@@ -414,6 +436,7 @@ private:
 		bool EnableTerrain = false;
 		bool EnableTaaDemo = false;
 		bool EnableAtmosphereDemo = false;
+		bool EnableRayTracedShadowDemo = false;
 		DirectX::XMFLOAT3 ScatterFieldHalfExtents = { 10.0f, 4.0f, 10.0f };
 		UINT ScatterOccluderCount = 18;
 		UINT ScatterBoxCount = 1536;

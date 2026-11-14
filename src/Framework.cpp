@@ -1287,6 +1287,7 @@ bool Framework::Init() {
 
 	InitDxgi();
 	InitD3D12Device();
+	m_rtShadows.Initialize(m_device.Get());
 	m_cbvSrvUavDescriptorSize = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 	CreateCommandObjects();
 	CreateFence();
@@ -1429,7 +1430,7 @@ LRESULT Framework::MsgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 		const bool firstPress = (lParam & 0x40000000) == 0;
 		if (firstPress)
 		{
-			if (HandleAtmosphereKey(vk)) {
+			if (HandleRayTracedShadowKey(vk) || (!IsRayTracedShadowScene() && HandleAtmosphereKey(vk))) {
 				UpdateWindowTitle();
 			}
 			else if (vk == VK_F1) {
@@ -1641,6 +1642,8 @@ void Framework::OnResize()
 	BuildPostProcessResources();
 	BuildTemporalResources();
 	BuildAtmosphereResources();
+	m_rtShadows.Resize(m_clientWidth, m_clientHeight, m_depthStencilBuffer.Get(),
+		m_depthStencilSrvFormat, m_gbuffer.Resource(1), Gbuffer::kNormalFormat);
 
 	ThrowIfFailed(m_commandList->Close());
 	ID3D12CommandList* cmdsLists[] = { m_commandList.Get() };
@@ -1728,13 +1731,15 @@ void Framework::Update(const double& dt)
 		ResetTemporalHistory();
 	}
 	XMStoreFloat4x4(&m_currentUnjitteredViewProj, XMMatrixTranspose(unjitteredViewProj));
-	m_taaJitter = taa::Jitter(m_taaFrameIndex, m_clientWidth, m_clientHeight, m_taaEnabled);
+	m_taaJitter = taa::Jitter(m_taaFrameIndex, m_clientWidth, m_clientHeight,
+		m_taaEnabled && !(IsRayTracedShadowScene() && m_rtShadowMask));
 	XMFLOAT4X4 jitteredProjection;
 	XMStoreFloat4x4(&jitteredProjection, proj);
 	jitteredProjection._31 += 2.0f * m_taaJitter.UV.x;
 	jitteredProjection._32 -= 2.0f * m_taaJitter.UV.y;
 	const XMMATRIX viewProj = view * XMLoadFloat4x4(&jitteredProjection);
 	UpdateTaaDemoObjects();
+	UpdateRayTracedShadowDemoObjects();
 	UpdateDynamicSceneObjects();
 	for (UINT i = 0; i < static_cast<UINT>(m_sceneObjects.size()); ++i) {
 		auto& constants = m_sceneObjects[i].Constants;
@@ -1800,6 +1805,8 @@ void Framework::Update(const double& dt)
 	m_atmosphereSettings.EyePosW = m_camPos;
 	m_atmosphereSettings.WorldToKm = scene && scene->EnableAtmosphereDemo ? 0.1f : 0.001f;
 	XMStoreFloat4x4(&deferred.View, XMMatrixTranspose(view));
+	m_rtShadowSettings.InvViewProj = deferred.InvViewProj;
+	m_rtShadowSettings.View = deferred.View;
 	for (UINT cascadeIndex = 0; cascadeIndex < ShadowCascadeCount; ++cascadeIndex) {
 		deferred.ShadowViewProj[cascadeIndex] = m_shadowViewProj[cascadeIndex];
 	}
@@ -1824,6 +1831,9 @@ void Framework::Update(const double& dt)
 	deferred.PointLightCount = pointCount;
 	deferred.SpotLightCount = spotCount;
 	deferred.DebugViewEnabled = m_showBufferDebug ? 1u : 0u;
+	deferred.RayTracedShadowsEnabled = IsRayTracedShadowScene() && m_rtShadows.Supported() ? 1u : 0u;
+	deferred.RayTracedShadowMask = deferred.RayTracedShadowsEnabled && m_rtShadowMask ? 1u : 0u;
+	if (IsRayTracedShadowScene()) deferred.ShadowParams.y = 0.0f;
 
 	for (UINT i = 0; i < dirCount; ++i) {
 		m_directionalLightSB->CopyData(i, m_directionalLights[i]);
@@ -1881,8 +1891,8 @@ void Framework::Update(const double& dt)
 			post.GrainStrength = 0.0f;
 			post.BloomStrength = m_terrainLodColors || m_terrainWireframe ? 0.0f : 0.18f;
 		}
-		post.DebugVelocity = m_taaShowVelocity ? 1u : 0u;
-		post.CleanOutput = scene && (scene->EnableTaaDemo || scene->EnableAtmosphereDemo) ? 1u : 0u;
+		post.DebugVelocity = m_taaShowVelocity || deferred.RayTracedShadowMask ? 1u : 0u;
+		post.CleanOutput = scene && (scene->EnableTaaDemo || scene->EnableAtmosphereDemo || scene->EnableRayTracedShadowDemo) ? 1u : 0u;
 		if (post.CleanOutput) {
 			post.MaxDofBlur = post.FisheyeStrength = post.ChromaticAberration = 0.0f;
 			post.GrainStrength = post.BloomStrength = post.VignetteStrength = 0.0f;
@@ -1946,11 +1956,11 @@ void Framework::Draw()
 	m_commandList->SetDescriptorHeaps(_countof(heaps), heaps);
 
 	if (m_terrain.Empty() && !m_sceneDefinitions[m_currentSceneIndex].EnableTaaDemo &&
-		!m_sceneDefinitions[m_currentSceneIndex].EnableAtmosphereDemo && !m_taaShowVelocity) {
+		!m_sceneDefinitions[m_currentSceneIndex].EnableAtmosphereDemo && !IsRayTracedShadowScene() && !m_taaShowVelocity) {
 		SimulateParticles();
 		SortParticlesOnGpu();
 	}
-	RenderSceneToShadowMap();
+	if (!IsRayTracedShadowScene()) RenderSceneToShadowMap();
 
 	m_commandList->RSSetViewports(1, &m_screenViewport);
 	m_commandList->RSSetScissorRects(1, &m_scissorRect);
@@ -2125,6 +2135,7 @@ void Framework::Draw()
 	depthToSrv.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
 	depthToSrv.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
 	m_commandList->ResourceBarrier(1, &depthToSrv);
+	RunRayTracedShadows();
 
 	TransitionPostProcessTexture(PostProcessHdrScene, D3D12_RESOURCE_STATE_RENDER_TARGET);
 	D3D12_CPU_DESCRIPTOR_HANDLE hdrSceneRtv = PostProcessRenderTargetView(PostProcessHdrScene);
@@ -2182,7 +2193,7 @@ void Framework::Draw()
 		const D3D12_CPU_DESCRIPTOR_HANDLE depthView = DepthStencilView();
 		m_commandList->OMSetRenderTargets(1, &hdrSceneRtv, TRUE, &depthView);
 		if (m_terrain.Empty() && !m_sceneDefinitions[m_currentSceneIndex].EnableTaaDemo &&
-			!m_sceneDefinitions[m_currentSceneIndex].EnableAtmosphereDemo && !m_taaShowVelocity) {
+			!m_sceneDefinitions[m_currentSceneIndex].EnableAtmosphereDemo && !IsRayTracedShadowScene() && !m_taaShowVelocity) {
 			DrawTransparentParticles();
 		}
 	}
@@ -2488,7 +2499,8 @@ void Framework::BuildCbvHeap()
 	m_pointLightSrvIndex = m_directionalLightSrvIndex + 1;
 	m_spotLightSrvIndex = m_pointLightSrvIndex + 1;
 	m_shadowSrvIndex = m_spotLightSrvIndex + 1;
-	m_particleUavBaseIndex = m_shadowSrvIndex + 1;
+	m_rtShadowSrvIndex = m_shadowSrvIndex + 1;
+	m_particleUavBaseIndex = m_rtShadowSrvIndex + 1;
 	m_particleSortUavIndex = m_particleUavBaseIndex + ParticleBufferCount;
 	m_particleSrvBaseIndex = m_particleSortUavIndex + 1;
 	m_particleSortSrvIndex = m_particleSrvBaseIndex + ParticleBufferCount * 2;
@@ -2502,7 +2514,8 @@ void Framework::BuildCbvHeap()
 	heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
 	heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
 
-	ThrowIfFailed(m_device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(m_cbvHeap.GetAddressOf())));
+	// Scene uploads have already flushed the GPU before replacing this heap.
+	ThrowIfFailed(m_device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(m_cbvHeap.ReleaseAndGetAddressOf())));
 }
 
 void Framework::BuildCbvViews()
@@ -2627,6 +2640,7 @@ void Framework::BuildCbvViews()
 	CreatePostProcessSrvDescriptors();
 	CreateTemporalDescriptors();
 	CreateAtmosphereDescriptors();
+	CreateRayTracedShadowDescriptor();
 
 	BuildParticleDescriptors();
 }
@@ -4110,6 +4124,18 @@ void Framework::InitializeSceneDefinitions()
 	atmosphere.DeferredAmbientIntensity = 0.12f;
 	atmosphere.ScatterFieldHalfExtents = { 100.0f, 20.0f, 150.0f };
 	m_sceneDefinitions.push_back(atmosphere);
+
+	SceneDefinition rt = {};
+	rt.Name = L"RT Shadows Lab";
+	rt.Format = SceneAssetFormat::Procedural;
+	rt.EnableRayTracedShadowDemo = true;
+	rt.CameraPos = { 0.0f, 6.0f, -12.0f };
+	rt.CameraTarget = { 0.0f, 0.0f, 4.0f };
+	rt.CameraMoveSpeed = 4.0f;
+	rt.EnableUvScroll = rt.EnableWindAnimation = false;
+	rt.DeferredAmbientIntensity = 0.12f;
+	rt.ScatterFieldHalfExtents = { 25.0f, 10.0f, 30.0f };
+	m_sceneDefinitions.push_back(rt);
 	m_atmosphereEnabled = m_sceneDefinitions[m_currentSceneIndex].EnableAtmosphereDemo;
 }
 
@@ -4186,6 +4212,20 @@ void Framework::UpdateWindowTitle() const
 	title += m_taaClamping ? L" Clamp:On" : L" Clamp:Off";
 	title += m_taaShowVelocity ? L" Motion:On" : L" Motion:Off";
 	title += m_animationPaused ? L" Anim:Pause" : L" Anim:Play";
+	if (IsRayTracedShadowScene()) {
+		const wchar_t* modes[] = { L"Off", L"Hard", L"Soft" };
+		auto Number = [](float value) { auto text = std::to_wstring(value); return text.substr(0, text.find(L'.') + 2); };
+		title += m_rtShadows.Supported() ? L" | DXR:On" : L" | DXR:Unsupported";
+		title += std::wstring(L" RT:") + modes[m_rtShadowMode];
+		title += L" Radius:" + Number(m_rtLightRadius) + L"deg Spp:" + std::to_wstring(m_rtShadowSamples);
+		title += m_rtShadowFilter ? L" Filter:On" : L" Filter:Off";
+		title += m_rtShadowMask ? L" Mask:On" : L" Mask:Off";
+		title += L" Height:" + Number(m_rtBlockerHeight);
+		title += m_rtOffscreenCaster ? L" Caster:On" : L" Caster:Off";
+		title += L" | F6 mode F7 mask F8 filter [ ] size O height B caster N samples P animate | 1-8 scenes";
+		SetWindowTextW(MainWnd(), title.c_str());
+		return;
+	}
 	if (m_atmosphereEnabled || (!m_sceneDefinitions.empty() && m_sceneDefinitions[m_currentSceneIndex].EnableAtmosphereDemo)) {
 		auto ShortNumber = [](float value) { auto text = std::to_wstring(value); return text.substr(0, text.find(L'.') + 3); };
 		title += m_atmosphereEnabled ? L" | Atmos:On" : L" | Atmos:Off";
@@ -4195,12 +4235,12 @@ void Framework::UpdateWindowTitle() const
 		title += L" Sun:" + ShortNumber(DirectX::XMConvertToDegrees(m_sunAzimuth)) + L"/" + ShortNumber(DirectX::XMConvertToDegrees(m_sunElevation));
 	}
 	if (!m_sceneDefinitions.empty() && m_sceneDefinitions[m_currentSceneIndex].EnableAtmosphereDemo) {
-		title += L" | Atmosphere Lab | G atmosphere | H aerial | F9 clean/F10 dirty | U/J Rayleigh | I/K Mie | arrows sun | 1-7 scenes";
+		title += L" | Atmosphere Lab | G atmosphere | H aerial | F9 clean/F10 dirty | U/J Rayleigh | I/K Mie | arrows sun | 1-8 scenes";
 		SetWindowTextW(MainWnd(), title.c_str());
 		return;
 	}
 	if (!m_sceneDefinitions.empty() && m_sceneDefinitions[m_currentSceneIndex].EnableTaaDemo) {
-		title += L" | TAA Lab | T TAA | V motion | R reprojection | C clamp | P pause | Home reset | 1-7 scenes";
+		title += L" | TAA Lab | T TAA | V motion | R reprojection | C clamp | P pause | Home reset | 1-8 scenes";
 		SetWindowTextW(MainWnd(), title.c_str());
 		return;
 	}
@@ -4266,6 +4306,12 @@ void Framework::BuildSceneObjects()
 	const SceneDefinition& scene = m_sceneDefinitions[m_currentSceneIndex];
 
 	m_taaDemoMovingObject = UINT_MAX;
+	m_rtMovingObject = m_rtRaisedObject = m_rtOffscreenObject = UINT_MAX;
+	m_rtShadows.InvalidateGeometry();
+	if (scene.EnableRayTracedShadowDemo) {
+		BuildRayTracedShadowDemoObjects();
+		return;
+	}
 	if (scene.EnableAtmosphereDemo) {
 		BuildAtmosphereDemoObjects();
 		return;
@@ -4915,6 +4961,16 @@ void Framework::BuildSceneLights()
 		? nullptr
 		: &m_sceneDefinitions[m_currentSceneIndex];
 
+	if (scene && scene->EnableRayTracedShadowDemo) {
+		m_directionalLightCount = 1;
+		m_pointLightCount = m_spotLightCount = 0;
+		XMFLOAT3 toLight;
+		XMStoreFloat3(&toLight, XMVector3Normalize(XMVectorSet(-1.2f, 1.0f, -0.4f, 0.0f)));
+		m_rtShadowSettings.ToLight = toLight;
+		m_directionalLights[0].DirectionIntensity = { -toLight.x, -toLight.y, -toLight.z, 1.5f };
+		m_directionalLights[0].Color = { 1.0f, 0.96f, 0.9f, 1.0f };
+		return;
+	}
 	if (scene && scene->EnableAtmosphereDemo) {
 		m_directionalLightCount = 1;
 		m_pointLightCount = m_spotLightCount = 0;
@@ -6686,7 +6742,7 @@ void Framework::BuildSceneGeometryUpload()
 	}
 	else if (vertices.empty())
 	{
-		if (!scene.EnableScatterField && !scene.EnableTaaDemo && !scene.EnableAtmosphereDemo) {
+		if (!scene.EnableScatterField && !scene.EnableTaaDemo && !scene.EnableAtmosphereDemo && !scene.EnableRayTracedShadowDemo) {
 			throw std::runtime_error("Scene loaded but produced 0 vertices.");
 		}
 

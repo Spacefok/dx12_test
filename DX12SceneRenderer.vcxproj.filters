@@ -45,6 +45,15 @@
     <ClCompile Include="src\AtmosphereDemo.cpp">
       <Filter>Исходные файлы</Filter>
     </ClCompile>
+    <ClCompile Include="src\RayTracedShadows.cpp">
+      <Filter>Исходные файлы</Filter>
+    </ClCompile>
+    <ClCompile Include="src\RayTracedShadowDemo.cpp">
+      <Filter>Исходные файлы</Filter>
+    </ClCompile>
+    <ClCompile Include="src\RayTracedShadowRendering.cpp">
+      <Filter>Исходные файлы</Filter>
+    </ClCompile>
     <ClCompile Include="src\Gbuffer.cpp">
       <Filter>Исходные файлы</Filter>
     </ClCompile>
@@ -69,6 +78,9 @@
       <Filter>Файлы заголовков</Filter>
     </ClInclude>
     <ClInclude Include="include\Atmosphere.hpp">
+      <Filter>Файлы заголовков</Filter>
+    </ClInclude>
+    <ClInclude Include="include\RayTracedShadows.hpp">
       <Filter>Файлы заголовков</Filter>
     </ClInclude>
     <ClInclude Include="include\Gbuffer.hpp">
@@ -98,6 +110,9 @@
       <Filter>Файлы ресурсов</Filter>
     </None>
     <None Include="shader\Atmosphere.hlsl">
+      <Filter>Файлы ресурсов</Filter>
+    </None>
+    <None Include="shader\RayTracedShadows.hlsl">
       <Filter>Файлы ресурсов</Filter>
     </None>
     <None Include="shader\DeferredGeometry.hlsl">

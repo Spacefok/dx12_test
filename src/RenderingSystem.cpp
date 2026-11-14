@@ -230,7 +230,7 @@ void RenderingSystem::BuildRootSignatures(ID3D12Device* device)
 
 		D3D12_DESCRIPTOR_RANGE srvRange = {};
 		srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-		srvRange.NumDescriptors = Gbuffer::kTargetCount + 5;
+		srvRange.NumDescriptors = Gbuffer::kTargetCount + 6;
 		srvRange.BaseShaderRegister = 0;
 		srvRange.RegisterSpace = 0;
 		srvRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;

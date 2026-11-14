@@ -138,6 +138,11 @@
     <ClCompile Include="src\TemporalDemo.cpp" />
     <ClCompile Include="src\AtmosphereRendering.cpp" />
     <ClCompile Include="src\AtmosphereDemo.cpp" />
+    <ClCompile Include="src\RayTracedShadows.cpp">
+      <AdditionalIncludeDirectories>$(IntDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <ClCompile Include="src\RayTracedShadowDemo.cpp" />
+    <ClCompile Include="src\RayTracedShadowRendering.cpp" />
     <ClCompile Include="src\Gbuffer.cpp" />
     <ClCompile Include="src\RenderingSystem.cpp" />
     <ClCompile Include="src\Timer.cpp" />
@@ -151,6 +156,7 @@
     <ClInclude Include="include\Terrain.hpp" />
     <ClInclude Include="include\TemporalAA.hpp" />
     <ClInclude Include="include\Atmosphere.hpp" />
+    <ClInclude Include="include\RayTracedShadows.hpp" />
     <ClInclude Include="include\Gbuffer.hpp" />
     <ClInclude Include="include\RenderStructs.hpp" />
     <ClInclude Include="include\RenderingSystem.hpp" />
@@ -163,6 +169,7 @@
   <ItemGroup>
     <None Include="shader\TemporalAA.hlsl" />
     <None Include="shader\Atmosphere.hlsl" />
+    <None Include="shader\RayTracedShadows.hlsl" />
     <None Include="shader\DeferredGeometry.hlsl">
       <DisableOptimizations Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</DisableOptimizations>
       <EnableDebuggingInformation Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</EnableDebuggingInformation>
@@ -195,6 +202,19 @@
     </None>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <Target Name="CompileRayTracedShadowShaders" BeforeTargets="ClCompile"
+          Inputs="$(ProjectDir)shader\RayTracedShadows.hlsl;$(MSBuildProjectFullPath)"
+          Outputs="$(IntDir)RayTracedShadowTrace.h;$(IntDir)RayTracedShadowFilter.h">
+    <PropertyGroup>
+      <RayShadowDxc>$([System.String]::Copy('$(WindowsSDK_ExecutablePath_x64)').Split(';')[0])\dxc.exe</RayShadowDxc>
+      <RayShadowFlags>-O3</RayShadowFlags>
+      <RayShadowFlags Condition="'$(Configuration)'=='Debug'">-Zi -Qembed_debug -Od</RayShadowFlags>
+    </PropertyGroup>
+    <Error Condition="!Exists('$(RayShadowDxc)')" Text="DXC is required for inline ray tracing. Install a recent Windows 10/11 SDK in Visual Studio." />
+    <MakeDir Directories="$(IntDir)" />
+    <Exec Command="&quot;$(RayShadowDxc)&quot; -T cs_6_5 -E CSTraceShadows -WX $(RayShadowFlags) -Fh &quot;$(IntDir)RayTracedShadowTrace.h&quot; -Vn g_RayTracedShadowTrace &quot;$(ProjectDir)shader\RayTracedShadows.hlsl&quot;" />
+    <Exec Command="&quot;$(RayShadowDxc)&quot; -T cs_6_5 -E CSFilterShadows -WX $(RayShadowFlags) -Fh &quot;$(IntDir)RayTracedShadowFilter.h&quot; -Vn g_RayTracedShadowFilter &quot;$(ProjectDir)shader\RayTracedShadows.hlsl&quot;" />
+  </Target>
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
 </Project>

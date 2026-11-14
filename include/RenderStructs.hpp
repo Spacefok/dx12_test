@@ -119,6 +119,9 @@ struct alignas(16) DeferredPassConstants {
 	std::uint32_t PointLightCount = 0;
 	std::uint32_t SpotLightCount = 0;
 	std::uint32_t DebugViewEnabled = 0;
+	std::uint32_t RayTracedShadowsEnabled = 0;
+	std::uint32_t RayTracedShadowMask = 0;
+	std::uint32_t ShadowPadding[2] = {};
 };
 
 struct alignas(16) PostProcessConstants {
@@ -173,6 +176,8 @@ static_assert(offsetof(PassConstants, UnjitteredViewProj) == 208
 	"PassCB temporal fields must match the HLSL constant-buffer layout.");
 static_assert(sizeof(MaterialConstants) % 16 == 0, "MaterialConstants must be 16-byte aligned sized.");
 static_assert(sizeof(DeferredPassConstants) % 16 == 0, "DeferredPassConstants must be 16-byte aligned sized.");
+static_assert(offsetof(DeferredPassConstants, RayTracedShadowsEnabled) == 464
+	&& sizeof(DeferredPassConstants) == 480, "DeferredPassCB shadow fields mismatch.");
 static_assert(sizeof(PostProcessConstants) % 16 == 0, "PostProcessConstants must be 16-byte aligned sized.");
 static_assert(sizeof(GpuParticle) % 16 == 0, "GpuParticle must be 16-byte aligned sized.");
 static_assert(sizeof(ParticleSimConstants) % 16 == 0, "ParticleSimConstants must be 16-byte aligned sized.");
