@@ -143,6 +143,12 @@
     </ClCompile>
     <ClCompile Include="src\RayTracedShadowDemo.cpp" />
     <ClCompile Include="src\RayTracedShadowRendering.cpp" />
+    <ClCompile Include="src\MeshletModel.cpp" />
+    <ClCompile Include="src\DirectStorageLoader.cpp" />
+    <ClCompile Include="src\MeshPipeline.cpp">
+      <AdditionalIncludeDirectories>$(IntDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <ClCompile Include="src\MeshPipelineDemo.cpp" />
     <ClCompile Include="src\Gbuffer.cpp" />
     <ClCompile Include="src\RenderingSystem.cpp" />
     <ClCompile Include="src\Timer.cpp" />
@@ -157,6 +163,9 @@
     <ClInclude Include="include\TemporalAA.hpp" />
     <ClInclude Include="include\Atmosphere.hpp" />
     <ClInclude Include="include\RayTracedShadows.hpp" />
+    <ClInclude Include="include\MeshletModel.hpp" />
+    <ClInclude Include="include\DirectStorageLoader.hpp" />
+    <ClInclude Include="include\MeshPipeline.hpp" />
     <ClInclude Include="include\Gbuffer.hpp" />
     <ClInclude Include="include\RenderStructs.hpp" />
     <ClInclude Include="include\RenderingSystem.hpp" />
@@ -170,6 +179,8 @@
     <None Include="shader\TemporalAA.hlsl" />
     <None Include="shader\Atmosphere.hlsl" />
     <None Include="shader\RayTracedShadows.hlsl" />
+    <None Include="shader\MeshPipeline.hlsl" />
+    <None Include="packages.config" />
     <None Include="shader\DeferredGeometry.hlsl">
       <DisableOptimizations Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</DisableOptimizations>
       <EnableDebuggingInformation Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</EnableDebuggingInformation>
@@ -216,5 +227,23 @@
     <Exec Command="&quot;$(RayShadowDxc)&quot; -T cs_6_5 -E CSFilterShadows -WX $(RayShadowFlags) -Fh &quot;$(IntDir)RayTracedShadowFilter.h&quot; -Vn g_RayTracedShadowFilter &quot;$(ProjectDir)shader\RayTracedShadows.hlsl&quot;" />
   </Target>
   <ImportGroup Label="ExtensionTargets">
+    <Import Project="packages\Microsoft.Direct3D.DirectStorage.1.3.0\build\native\targets\Microsoft.Direct3D.DirectStorage.targets" Condition="Exists('packages\Microsoft.Direct3D.DirectStorage.1.3.0\build\native\targets\Microsoft.Direct3D.DirectStorage.targets')" />
   </ImportGroup>
+  <Target Name="CheckDirectStoragePackage" BeforeTargets="PrepareForBuild">
+    <Error Condition="!Exists('packages\Microsoft.Direct3D.DirectStorage.1.3.0\build\native\targets\Microsoft.Direct3D.DirectStorage.targets')" Text="Restore NuGet packages first: MSBuild DX12SceneRenderer.sln /restore /p:RestorePackagesConfig=true /p:Configuration=Debug /p:Platform=x64" />
+  </Target>
+  <Target Name="CompileMeshPipelineShaders" BeforeTargets="ClCompile"
+          Inputs="$(ProjectDir)shader\MeshPipeline.hlsl;$(ProjectDir)shader\DeferredGeometry.hlsl;$(MSBuildProjectFullPath)"
+          Outputs="$(IntDir)MeshPipelineMS.h;$(IntDir)MeshPipelineVS.h;$(IntDir)MeshPipelinePS.h">
+    <PropertyGroup>
+      <MeshDxc>$([System.String]::Copy('$(WindowsSDK_ExecutablePath_x64)').Split(';')[0])\dxc.exe</MeshDxc>
+      <MeshCompileFlags>-O3</MeshCompileFlags>
+      <MeshCompileFlags Condition="'$(Configuration)'=='Debug'">-Zi -Qembed_debug -Od</MeshCompileFlags>
+    </PropertyGroup>
+    <Error Condition="!Exists('$(MeshDxc)')" Text="Mesh shaders require DXC from a recent Windows 10/11 SDK." />
+    <MakeDir Directories="$(IntDir)" />
+    <Exec Command="&quot;$(MeshDxc)&quot; -T ms_6_5 -E MSMain -WX $(MeshCompileFlags) -Fh &quot;$(IntDir)MeshPipelineMS.h&quot; -Vn g_MeshPipelineMS &quot;$(ProjectDir)shader\MeshPipeline.hlsl&quot;" />
+    <Exec Command="&quot;$(MeshDxc)&quot; -T vs_6_5 -E VSReference -WX $(MeshCompileFlags) -Fh &quot;$(IntDir)MeshPipelineVS.h&quot; -Vn g_MeshPipelineVS &quot;$(ProjectDir)shader\MeshPipeline.hlsl&quot;" />
+    <Exec Command="&quot;$(MeshDxc)&quot; -T ps_6_5 -E PSGBuffer -WX $(MeshCompileFlags) -Fh &quot;$(IntDir)MeshPipelinePS.h&quot; -Vn g_MeshPipelinePS &quot;$(ProjectDir)shader\DeferredGeometry.hlsl&quot;" />
+  </Target>
 </Project>

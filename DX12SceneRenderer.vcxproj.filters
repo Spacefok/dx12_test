@@ -54,6 +54,10 @@
     <ClCompile Include="src\RayTracedShadowRendering.cpp">
       <Filter>Исходные файлы</Filter>
     </ClCompile>
+    <ClCompile Include="src\MeshletModel.cpp"><Filter>Исходные файлы</Filter></ClCompile>
+    <ClCompile Include="src\DirectStorageLoader.cpp"><Filter>Исходные файлы</Filter></ClCompile>
+    <ClCompile Include="src\MeshPipeline.cpp"><Filter>Исходные файлы</Filter></ClCompile>
+    <ClCompile Include="src\MeshPipelineDemo.cpp"><Filter>Исходные файлы</Filter></ClCompile>
     <ClCompile Include="src\Gbuffer.cpp">
       <Filter>Исходные файлы</Filter>
     </ClCompile>
@@ -83,6 +87,9 @@
     <ClInclude Include="include\RayTracedShadows.hpp">
       <Filter>Файлы заголовков</Filter>
     </ClInclude>
+    <ClInclude Include="include\MeshletModel.hpp"><Filter>Файлы заголовков</Filter></ClInclude>
+    <ClInclude Include="include\DirectStorageLoader.hpp"><Filter>Файлы заголовков</Filter></ClInclude>
+    <ClInclude Include="include\MeshPipeline.hpp"><Filter>Файлы заголовков</Filter></ClInclude>
     <ClInclude Include="include\Gbuffer.hpp">
       <Filter>Файлы заголовков</Filter>
     </ClInclude>
@@ -115,6 +122,7 @@
     <None Include="shader\RayTracedShadows.hlsl">
       <Filter>Файлы ресурсов</Filter>
     </None>
+    <None Include="shader\MeshPipeline.hlsl"><Filter>Файлы ресурсов</Filter></None>
     <None Include="shader\DeferredGeometry.hlsl">
       <Filter>Файлы ресурсов</Filter>
     </None>

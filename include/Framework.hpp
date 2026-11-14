@@ -21,6 +21,7 @@
 #include "TemporalAA.hpp"
 #include "Atmosphere.hpp"
 #include "RayTracedShadows.hpp"
+#include "MeshPipeline.hpp"
 
 class Framework : public IWindowMessageHandler {
 public:
@@ -171,6 +172,15 @@ private:
 	UINT m_rtRaisedObject = UINT_MAX;
 	UINT m_rtOffscreenObject = UINT_MAX;
 
+	MeshPipeline m_meshPipeline;
+	ObjectConstants m_meshObject = {};
+	bool m_meshEnabled = true;
+	bool m_meshColors = false;
+	bool m_meshSingle = false;
+	UINT m_meshSelection = 0;
+	float m_meshAngle = 0.0f;
+	float m_meshScale = 1.0f;
+
 	DXGI_FORMAT m_depthStencilFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;
 	DXGI_FORMAT m_depthStencilResourceFormat = DXGI_FORMAT_R24G8_TYPELESS;
 	DXGI_FORMAT m_depthStencilSrvFormat = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
@@ -288,6 +298,11 @@ private:
 	bool IsRayTracedShadowScene() const;
 	void RunRayTracedShadows();
 	void CreateRayTracedShadowDescriptor();
+	bool IsMeshPipelineScene() const;
+	void BuildMeshPipelineDemo();
+	void UpdateMeshPipelineDemo();
+	bool HandleMeshPipelineKey(UINT key);
+	void DrawMeshPipeline();
 	void UpdateCascadedShadowMaps(const DirectX::XMMATRIX& view);
 	void RenderSceneToShadowMap();
 	void BuildRootSignature();
@@ -437,6 +452,7 @@ private:
 		bool EnableTaaDemo = false;
 		bool EnableAtmosphereDemo = false;
 		bool EnableRayTracedShadowDemo = false;
+		bool EnableMeshPipelineDemo = false;
 		DirectX::XMFLOAT3 ScatterFieldHalfExtents = { 10.0f, 4.0f, 10.0f };
 		UINT ScatterOccluderCount = 18;
 		UINT ScatterBoxCount = 1536;

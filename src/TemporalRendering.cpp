@@ -136,6 +136,7 @@ void Framework::FinishTemporalFrame()
     XMStoreFloat3(&m_previousCameraForward,
         XMVector3Normalize(XMLoadFloat3(&m_camTarget) - XMLoadFloat3(&m_camPos)));
     m_previousAnimationTime = m_animationTime;
+    m_meshObject.PreviousWorld = m_meshObject.World;
     for (auto& object : m_sceneObjects)
         object.Constants.PreviousWorld = object.Constants.World;
     m_previousFrameValid = true;

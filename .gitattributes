@@ -13,3 +13,5 @@ src/ufbx.c linguist-vendored
 *.psd binary
 *.tga binary
 *.r16 binary
+*.rgba binary
+assets/mesh_pipeline/*.bin binary

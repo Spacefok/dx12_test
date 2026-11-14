@@ -7,10 +7,12 @@ A Windows-focused DirectX 12 renderer written in C++17 for experimenting with re
 - Deferred lighting pipeline with a G-buffer pass and fullscreen lighting pass
 - Adaptive tessellation and displacement-aware materials
 - OBJ and FBX scene loading via bundled `tinyobjloader` and `ufbx`
-- Eight demo scenes: `Sponza`, `Bistro`, `San Miguel`, procedural `Culling Lab`, `Terrain`, `TAA Lab`, `Atmosphere Lab`, and `RT Shadows Lab`
+- Nine demo scenes: `Sponza`, `Bistro`, `San Miguel`, procedural `Culling Lab`, `Terrain`, `TAA Lab`, `Atmosphere Lab`, `RT Shadows Lab`, and `Mesh Pipeline Lab`
 - Native-resolution temporal anti-aliasing with Halton jitter, motion vectors, and neighborhood history clamping
 - Single-scattering Rayleigh/Mie atmosphere with sky and depth-limited aerial perspective
 - Inline ray-traced hard and soft shadows with a refittable TLAS and edge-aware denoising
+- Mesh shader rendering with meshlet diagnostics and an indexed reference path
+- DirectStorage loading of mesh geometry and texture into GPU resources
 - Frustum culling, octree culling, and occlusion culling toggles for side-by-side comparison
 - Procedural water surface, scatter-field props, and tree billboard LODs
 - Tiled heightmap terrain with quadtree LOD, screen-space error selection, and frustum culling
@@ -21,7 +23,7 @@ A Windows-focused DirectX 12 renderer written in C++17 for experimenting with re
 - `Space` / `Ctrl` move up and down
 - `Shift` boosts camera speed
 - Hold RMB and move the mouse to look around
-- `1`-`8` switch scenes (`5` selects Terrain, `6` TAA Lab, `7` Atmosphere Lab, `8` RT Shadows Lab)
+- `1`-`9` switch scenes (`5` selects Terrain, `6` TAA Lab, `7` Atmosphere Lab, `8` RT Shadows Lab, `9` Mesh Pipeline Lab)
 - `Home` resets the current scene's camera
 - `F1` toggles G-buffer debug view
 - `F2` toggles frustum culling
@@ -52,12 +54,85 @@ Build steps:
 
 1. Open `DX12SceneRenderer.sln` in Visual Studio 2022.
 2. Select `x64` and either `Debug` or `Release`.
-3. Build and run from the repository root so relative `assets/` and `shader/` paths resolve correctly.
+3. Restore NuGet packages, then build. The project uses `Microsoft.Direct3D.DirectStorage` 1.3.0.
+4. Run from the repository root so relative `assets/` and `shader/` paths resolve correctly.
 
-The build compiles the RT compute shader with the SDK's DXC into intermediate
+From a Visual Studio developer shell, restore and build with:
+
+~~~powershell
+MSBuild DX12SceneRenderer.sln /restore /p:RestorePackagesConfig=true /m /p:Configuration=Debug /p:Platform=x64
+~~~
+
+NuGet downloads the SDK into the ignored `packages/` directory and copies
+`dstorage.dll` and `dstoragecore.dll` beside the executable. Keep both DLLs
+with the application when copying a build.
+
+The build compiles the RT and mesh pipeline shaders with the SDK's DXC into intermediate
 headers embedded in the executable. No extra compiler DLL is needed at runtime.
 RT Shadows Lab requires DXR Tier 1.1 and Shader Model 6.5. Other scenes keep
 their existing shadow maps; an unsupported adapter is reported in the title.
+
+## Mesh Pipeline Demo
+
+~~~powershell
+.\x64\Debug\DX12SceneRenderer.exe --mesh-pipeline
+~~~
+
+The packaged torus knot contains 66,177 vertices, 131,072 triangles, and 2,130
+meshlets. Each meshlet holds at most 64 vertices and 126 triangles. Its local
+vertex table refers to the original vertex array; each triangle packs three
+local indices into one `uint`. The final partial meshlet has 58 vertices and
+56 triangles. Loading validates every index and verifies that expanding all
+meshlets reproduces the original triangle list exactly.
+
+| Key | Action |
+| --- | --- |
+| `F6` | Switch Mesh Shader / classic indexed rendering |
+| `F7` | Toggle a distinct color for each meshlet |
+| `F8` | Show one selected meshlet / the entire model |
+| `+` / `-` | Select the next / previous meshlet |
+| `PageUp` / `PageDown` | Move the selection by 64 meshlets |
+| `End` | Select the last, partial meshlet |
+| `[` / `]` | Rotate the object around Y by 15 degrees |
+| `O` | Switch object scale between 1 and 0.65 |
+| `L` | Reload using CPU upload / DirectStorage, preserving the view and selection |
+| `9` | Reload the demonstration defaults with DirectStorage |
+
+Mesh Shader Tier 1 and Shader Model 6.5 are required for `DispatchMesh`.
+With Shader Model 6.5 but no mesh shader support, the scene uses the indexed
+reference path and reports `MeshSupport:No`. The mesh shader runs one group
+per meshlet, calls `SetMeshOutputCounts` with its actual counts, and emits
+positions, normals, UVs, colors, and motion data for the existing G-buffer
+pixel shader. The reference path reads the same vertices and original indices.
+Both paths support the same color and single-meshlet modes. Turn TAA off with
+`T` for a direct image comparison, and rotate the object if a selected meshlet
+is on its back side.
+
+The default loader submits five geometry buffer requests and one RGBA8 texture
+request through a DirectStorage file queue. Completion status and a fence are
+checked before resource transitions and rendering. `IO` in the title identifies
+the selected loader. `Load` measures the entire load, including CPU validation,
+resource creation, and GPU waits; it is not a storage benchmark. CPU validation
+reads the source file before DirectStorage, so these timings are not cold-cache
+measurements. The ordinary loader provides a comparison using the same assets.
+If DirectStorage fails at scene startup, a successful CPU load keeps the demo
+available and displays the error. Press `L` to retry DirectStorage. A failed
+reload preserves the previously loaded model.
+
+`assets/mesh_pipeline/model.bin` stores the versioned header, original vertices
+and indices, meshlet descriptors, global vertex mappings, and packed triangles.
+Sections begin at 512-byte boundaries. `albedo.rgba` is a 256 x 256, single-mip
+RGBA8 texture with a 1,024-byte row pitch. Both files can be regenerated with
+Python's standard library:
+
+~~~powershell
+py -3 tools/generate_mesh_model.py
+~~~
+
+Start reading at `src/MeshletModel.cpp`, `src/MeshPipeline.cpp`,
+`shader/MeshPipeline.hlsl`, and `src/DirectStorageLoader.cpp`. This scene uses
+one static model without an amplification shader or meshlet culling; the
+existing lighting, camera, and TAA passes remain shared with the renderer.
 
 ## RT Shadows Demo
 
