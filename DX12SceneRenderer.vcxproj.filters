@@ -39,6 +39,12 @@
     <ClCompile Include="src\TemporalDemo.cpp">
       <Filter>Исходные файлы</Filter>
     </ClCompile>
+    <ClCompile Include="src\AtmosphereRendering.cpp">
+      <Filter>Исходные файлы</Filter>
+    </ClCompile>
+    <ClCompile Include="src\AtmosphereDemo.cpp">
+      <Filter>Исходные файлы</Filter>
+    </ClCompile>
     <ClCompile Include="src\Gbuffer.cpp">
       <Filter>Исходные файлы</Filter>
     </ClCompile>
@@ -60,6 +66,9 @@
       <Filter>Файлы заголовков</Filter>
     </ClInclude>
     <ClInclude Include="include\TemporalAA.hpp">
+      <Filter>Файлы заголовков</Filter>
+    </ClInclude>
+    <ClInclude Include="include\Atmosphere.hpp">
       <Filter>Файлы заголовков</Filter>
     </ClInclude>
     <ClInclude Include="include\Gbuffer.hpp">
@@ -86,6 +95,9 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="shader\TemporalAA.hlsl">
+      <Filter>Файлы ресурсов</Filter>
+    </None>
+    <None Include="shader\Atmosphere.hlsl">
       <Filter>Файлы ресурсов</Filter>
     </None>
     <None Include="shader\DeferredGeometry.hlsl">

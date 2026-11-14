@@ -19,6 +19,7 @@
 #include "RenderingSystem.hpp"
 #include "Terrain.hpp"
 #include "TemporalAA.hpp"
+#include "Atmosphere.hpp"
 
 class Framework : public IWindowMessageHandler {
 public:
@@ -145,6 +146,15 @@ private:
 	bool m_animationPaused = false;
 	UINT m_taaDemoMovingObject = UINT_MAX;
 
+	AtmosphereConstants m_atmosphereSettings = {};
+	std::unique_ptr<UploadBuffer<AtmosphereConstants>> m_atmosphereCB;
+	ComPtr<ID3D12Resource> m_atmosphereOutput;
+	ComPtr<ID3D12DescriptorHeap> m_atmosphereRtvHeap;
+	UINT m_atmosphereSrvBaseIndex = 0;
+	bool m_atmosphereEnabled = false;
+	float m_sunAzimuth = -0.436332313f;
+	float m_sunElevation = 0.314159265f;
+
 	DXGI_FORMAT m_depthStencilFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;
 	DXGI_FORMAT m_depthStencilResourceFormat = DXGI_FORMAT_R24G8_TYPELESS;
 	DXGI_FORMAT m_depthStencilSrvFormat = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
@@ -250,6 +260,12 @@ private:
 	void FinishTemporalFrame();
 	void BuildTaaDemoObjects();
 	void UpdateTaaDemoObjects();
+	void BuildAtmosphereResources();
+	void CreateAtmosphereDescriptors();
+	void RunAtmosphere();
+	void UpdateAtmosphereSun(float dt);
+	bool HandleAtmosphereKey(UINT key);
+	void BuildAtmosphereDemoObjects();
 	void UpdateCascadedShadowMaps(const DirectX::XMMATRIX& view);
 	void RenderSceneToShadowMap();
 	void BuildRootSignature();
@@ -397,6 +413,7 @@ private:
 		bool EnableScatterField = false;
 		bool EnableTerrain = false;
 		bool EnableTaaDemo = false;
+		bool EnableAtmosphereDemo = false;
 		DirectX::XMFLOAT3 ScatterFieldHalfExtents = { 10.0f, 4.0f, 10.0f };
 		UINT ScatterOccluderCount = 18;
 		UINT ScatterBoxCount = 1536;

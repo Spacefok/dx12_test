@@ -76,6 +76,9 @@ void RenderingSystem::BuildShaders()
 	m_temporalVsByteCode = CompileShader(L"shader\\TemporalAA.hlsl", nullptr, "VSFullscreen", "vs_5_1");
 	m_temporalPsByteCode = CompileShader(L"shader\\TemporalAA.hlsl", nullptr, "PSTemporalAA", "ps_5_1");
 
+	m_atmosphereVsByteCode = CompileShader(L"shader\\Atmosphere.hlsl", nullptr, "VSFullscreen", "vs_5_1");
+	m_atmospherePsByteCode = CompileShader(L"shader\\Atmosphere.hlsl", nullptr, "PSAtmosphere", "ps_5_1");
+
 	m_postProcessVsByteCode = CompileShader(L"shader\\PostProcess.hlsl", nullptr, "VSFullscreen", "vs_5_1");
 	m_postDownsamplePsByteCode = CompileShader(L"shader\\PostProcess.hlsl", nullptr, "PSDownsample", "ps_5_1");
 	m_postBrightPassPsByteCode = CompileShader(L"shader\\PostProcess.hlsl", nullptr, "PSBrightPass", "ps_5_1");
@@ -333,6 +336,10 @@ void RenderingSystem::BuildRootSignatures(ID3D12Device* device)
 			D3D12_ROOT_SIGNATURE_FLAG_DENY_DOMAIN_SHADER_ROOT_ACCESS |
 			D3D12_ROOT_SIGNATURE_FLAG_DENY_GEOMETRY_SHADER_ROOT_ACCESS;
 		m_temporalRootSignature = CreateRootSignature(device, rootSigDesc);
+
+		// Atmosphere shares the fullscreen layout but only reads HDR color and depth.
+		srvRange.NumDescriptors = 2;
+		m_atmosphereRootSignature = CreateRootSignature(device, rootSigDesc);
 	}
 
 	{
@@ -828,6 +835,11 @@ void RenderingSystem::BuildPSOs(ID3D12Device* device, DXGI_FORMAT backBufferForm
 		psoDesc.VS = { m_temporalVsByteCode->GetBufferPointer(), m_temporalVsByteCode->GetBufferSize() };
 		psoDesc.PS = { m_temporalPsByteCode->GetBufferPointer(), m_temporalPsByteCode->GetBufferSize() };
 		ThrowIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&m_temporalPso)));
+
+		psoDesc.pRootSignature = m_atmosphereRootSignature.Get();
+		psoDesc.VS = { m_atmosphereVsByteCode->GetBufferPointer(), m_atmosphereVsByteCode->GetBufferSize() };
+		psoDesc.PS = { m_atmospherePsByteCode->GetBufferPointer(), m_atmospherePsByteCode->GetBufferSize() };
+		ThrowIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&m_atmospherePso)));
 	}
 
 	{

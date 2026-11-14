@@ -136,6 +136,8 @@
     <ClCompile Include="src\FrameCapture.cpp" />
     <ClCompile Include="src\TemporalRendering.cpp" />
     <ClCompile Include="src\TemporalDemo.cpp" />
+    <ClCompile Include="src\AtmosphereRendering.cpp" />
+    <ClCompile Include="src\AtmosphereDemo.cpp" />
     <ClCompile Include="src\Gbuffer.cpp" />
     <ClCompile Include="src\RenderingSystem.cpp" />
     <ClCompile Include="src\Timer.cpp" />
@@ -148,6 +150,7 @@
     <ClInclude Include="include\Framework.hpp" />
     <ClInclude Include="include\Terrain.hpp" />
     <ClInclude Include="include\TemporalAA.hpp" />
+    <ClInclude Include="include\Atmosphere.hpp" />
     <ClInclude Include="include\Gbuffer.hpp" />
     <ClInclude Include="include\RenderStructs.hpp" />
     <ClInclude Include="include\RenderingSystem.hpp" />
@@ -159,6 +162,7 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="shader\TemporalAA.hlsl" />
+    <None Include="shader\Atmosphere.hlsl" />
     <None Include="shader\DeferredGeometry.hlsl">
       <DisableOptimizations Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</DisableOptimizations>
       <EnableDebuggingInformation Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</EnableDebuggingInformation>

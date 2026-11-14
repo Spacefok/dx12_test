@@ -92,6 +92,14 @@ void Framework::RunTemporalAA()
     constants.ReprojectionEnabled = m_taaReprojection ? 1u : 0u;
     constants.ClampingEnabled = m_taaClamping ? 1u : 0u;
     constants.ShowVelocity = m_taaShowVelocity ? 1u : 0u;
+    constants.SkyReprojection = m_atmosphereEnabled && !m_showBufferDebug ? 1u : 0u;
+    if (constants.SkyReprojection) {
+        const XMMATRIX current = XMMatrixTranspose(XMLoadFloat4x4(&m_currentUnjitteredViewProj));
+        const XMMATRIX previous = m_previousFrameValid
+            ? XMMatrixTranspose(XMLoadFloat4x4(&m_previousViewProj)) : current;
+        XMStoreFloat4x4(&constants.ClipToPreviousSky,
+            XMMatrixTranspose(taa::SkyClipToPrevious(current, previous, m_camPos)));
+    }
     m_taaCB->CopyData(0, constants);
 
     const UINT writeIndex = 1u - m_taaReadIndex;

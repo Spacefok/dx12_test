@@ -14,7 +14,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR commandLine, int)
         while (arguments >> argument) {
             if (argument == L"--terrain") initialScene = 4;
             else if (argument == L"--taa-demo") initialScene = 5;
-            else throw std::invalid_argument("Usage: DX12SceneRenderer.exe [--terrain | --taa-demo]");
+            else if (argument == L"--atmosphere") initialScene = 6;
+            else throw std::invalid_argument("Usage: DX12SceneRenderer.exe [--terrain | --taa-demo | --atmosphere]");
         }
         Framework app(1280, 720, L"DX12 Scene Renderer", initialScene);
         if (!app.Init()) return 0;

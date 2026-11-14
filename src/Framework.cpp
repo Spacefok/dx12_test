@@ -1429,7 +1429,10 @@ LRESULT Framework::MsgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 		const bool firstPress = (lParam & 0x40000000) == 0;
 		if (firstPress)
 		{
-			if (vk == VK_F1) {
+			if (HandleAtmosphereKey(vk)) {
+				UpdateWindowTitle();
+			}
+			else if (vk == VK_F1) {
 				m_showBufferDebug = !m_showBufferDebug;
 				ResetTemporalHistory();
 				UpdateWindowTitle();
@@ -1637,6 +1640,7 @@ void Framework::OnResize()
 
 	BuildPostProcessResources();
 	BuildTemporalResources();
+	BuildAtmosphereResources();
 
 	ThrowIfFailed(m_commandList->Close());
 	ID3D12CommandList* cmdsLists[] = { m_commandList.Get() };
@@ -1671,6 +1675,7 @@ void Framework::Update(const double& dt)
 
 	m_uvAnimation.x -= std::floor(m_uvAnimation.x);
 	m_uvAnimation.y -= std::floor(m_uvAnimation.y);
+	UpdateAtmosphereSun(static_cast<float>(dt));
 
 	XMVECTOR pos = XMLoadFloat3(&m_camPos);
 	XMVECTOR target = XMLoadFloat3(&m_camTarget);
@@ -1701,6 +1706,14 @@ void Framework::Update(const double& dt)
 
 	XMStoreFloat3(&m_camPos, pos);
 	XMStoreFloat3(&m_camTarget, target);
+
+	if (scene && scene->EnableAtmosphereDemo && m_camPos.y < 0.02f) {
+		const float lift = 0.02f - m_camPos.y;
+		m_camPos.y += lift;
+		m_camTarget.y += lift;
+		pos = XMLoadFloat3(&m_camPos);
+		target = XMLoadFloat3(&m_camTarget);
+	}
 
 	XMMATRIX view = XMMatrixLookAtLH(pos, target, up);
 
@@ -1783,6 +1796,9 @@ void Framework::Update(const double& dt)
 	deferred.AmbientIntensity = scene ? scene->DeferredAmbientIntensity : 0.18f;
 	deferred.AmbientColor = scene ? scene->DeferredAmbientColor : DirectX::XMFLOAT4{ 1.0f, 1.0f, 1.0f, 1.0f };
 	XMStoreFloat4x4(&deferred.InvViewProj, XMMatrixTranspose(XMMatrixInverse(nullptr, viewProj)));
+	m_atmosphereSettings.InvViewProj = deferred.InvViewProj;
+	m_atmosphereSettings.EyePosW = m_camPos;
+	m_atmosphereSettings.WorldToKm = scene && scene->EnableAtmosphereDemo ? 0.1f : 0.001f;
 	XMStoreFloat4x4(&deferred.View, XMMatrixTranspose(view));
 	for (UINT cascadeIndex = 0; cascadeIndex < ShadowCascadeCount; ++cascadeIndex) {
 		deferred.ShadowViewProj[cascadeIndex] = m_shadowViewProj[cascadeIndex];
@@ -1866,7 +1882,7 @@ void Framework::Update(const double& dt)
 			post.BloomStrength = m_terrainLodColors || m_terrainWireframe ? 0.0f : 0.18f;
 		}
 		post.DebugVelocity = m_taaShowVelocity ? 1u : 0u;
-		post.CleanOutput = scene && scene->EnableTaaDemo ? 1u : 0u;
+		post.CleanOutput = scene && (scene->EnableTaaDemo || scene->EnableAtmosphereDemo) ? 1u : 0u;
 		if (post.CleanOutput) {
 			post.MaxDofBlur = post.FisheyeStrength = post.ChromaticAberration = 0.0f;
 			post.GrainStrength = post.BloomStrength = post.VignetteStrength = 0.0f;
@@ -1929,7 +1945,8 @@ void Framework::Draw()
 	ID3D12DescriptorHeap* heaps[] = { m_cbvHeap.Get() };
 	m_commandList->SetDescriptorHeaps(_countof(heaps), heaps);
 
-	if (m_terrain.Empty() && !m_sceneDefinitions[m_currentSceneIndex].EnableTaaDemo && !m_taaShowVelocity) {
+	if (m_terrain.Empty() && !m_sceneDefinitions[m_currentSceneIndex].EnableTaaDemo &&
+		!m_sceneDefinitions[m_currentSceneIndex].EnableAtmosphereDemo && !m_taaShowVelocity) {
 		SimulateParticles();
 		SortParticlesOnGpu();
 	}
@@ -2121,6 +2138,7 @@ void Framework::Draw()
 	m_commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 	m_commandList->DrawInstanced(3, 1, 0, 0);
 
+	RunAtmosphere();
 	RunTemporalAA();
 
 	D3D12_RESOURCE_BARRIER depthToWrite{};
@@ -2163,7 +2181,8 @@ void Framework::Draw()
 	{
 		const D3D12_CPU_DESCRIPTOR_HANDLE depthView = DepthStencilView();
 		m_commandList->OMSetRenderTargets(1, &hdrSceneRtv, TRUE, &depthView);
-		if (m_terrain.Empty() && !m_sceneDefinitions[m_currentSceneIndex].EnableTaaDemo && !m_taaShowVelocity) {
+		if (m_terrain.Empty() && !m_sceneDefinitions[m_currentSceneIndex].EnableTaaDemo &&
+			!m_sceneDefinitions[m_currentSceneIndex].EnableAtmosphereDemo && !m_taaShowVelocity) {
 			DrawTransparentParticles();
 		}
 	}
@@ -2448,6 +2467,7 @@ void Framework::BuildConstantBuffers()
 	m_deferredPassCB = std::make_unique<UploadBuffer<DeferredPassConstants>>(m_device.Get(), 1, true);
 	m_postProcessCB = std::make_unique<UploadBuffer<PostProcessConstants>>(m_device.Get(), 1, true);
 	m_taaCB = std::make_unique<UploadBuffer<TemporalAAConstants>>(m_device.Get(), 1, true);
+	m_atmosphereCB = std::make_unique<UploadBuffer<AtmosphereConstants>>(m_device.Get(), 1, true);
 	m_shadowPassCB = std::make_unique<UploadBuffer<PassConstants>>(m_device.Get(), ShadowCascadeCount, true);
 	m_directionalLightSB = std::make_unique<UploadBuffer<GpuDirectionalLight>>(m_device.Get(), MaxDirectionalLights, false);
 	m_pointLightSB = std::make_unique<UploadBuffer<GpuPointLight>>(m_device.Get(), MaxPointLights, false);
@@ -2475,9 +2495,10 @@ void Framework::BuildCbvHeap()
 	m_postProcessSrvBaseIndex = m_particleSortSrvIndex + 1;
 	m_postProcessFinalSrvBaseIndex = m_postProcessSrvBaseIndex + PostProcessTextureCount;
 	m_taaSrvBaseIndex = m_postProcessFinalSrvBaseIndex + 3;
+	m_atmosphereSrvBaseIndex = m_taaSrvBaseIndex + 8;
 
 	D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
-	heapDesc.NumDescriptors = m_taaSrvBaseIndex + 8;
+	heapDesc.NumDescriptors = m_atmosphereSrvBaseIndex + 2;
 	heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
 	heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
 
@@ -2605,6 +2626,7 @@ void Framework::BuildCbvViews()
 
 	CreatePostProcessSrvDescriptors();
 	CreateTemporalDescriptors();
+	CreateAtmosphereDescriptors();
 
 	BuildParticleDescriptors();
 }
@@ -4075,6 +4097,20 @@ void Framework::InitializeSceneDefinitions()
 	temporal.DeferredAmbientIntensity = 0.35f;
 	temporal.ScatterFieldHalfExtents = { 7.0f, 5.0f, 8.0f };
 	m_sceneDefinitions.push_back(temporal);
+
+	SceneDefinition atmosphere = {};
+	atmosphere.Name = L"Atmosphere Lab";
+	atmosphere.Format = SceneAssetFormat::Procedural;
+	atmosphere.EnableAtmosphereDemo = true;
+	atmosphere.CameraPos = { 0.0f, 2.0f, -12.0f };
+	atmosphere.CameraTarget = { 0.0f, 2.0f, 30.0f };
+	atmosphere.CameraMoveSpeed = 6.0f;
+	atmosphere.EnableUvScroll = false;
+	atmosphere.EnableWindAnimation = false;
+	atmosphere.DeferredAmbientIntensity = 0.12f;
+	atmosphere.ScatterFieldHalfExtents = { 100.0f, 20.0f, 150.0f };
+	m_sceneDefinitions.push_back(atmosphere);
+	m_atmosphereEnabled = m_sceneDefinitions[m_currentSceneIndex].EnableAtmosphereDemo;
 }
 
 void Framework::LoadScene(size_t sceneIndex, bool resetCamera)
@@ -4089,6 +4125,10 @@ void Framework::LoadScene(size_t sceneIndex, bool resetCamera)
 
 	const SceneDefinition& scene = m_sceneDefinitions[m_currentSceneIndex];
 	m_cameraMoveSpeed = scene.CameraMoveSpeed;
+	m_atmosphereEnabled = scene.EnableAtmosphereDemo;
+	m_atmosphereSettings = {};
+	m_sunAzimuth = DirectX::XMConvertToRadians(-25.0f);
+	m_sunElevation = DirectX::XMConvertToRadians(18.0f);
 	m_tessellationMinDistance = scene.TessellationMinDistance;
 	m_tessellationMaxDistance = scene.TessellationMaxDistance;
 	m_tessellationMinFactor = scene.TessellationMinFactor;
@@ -4146,8 +4186,21 @@ void Framework::UpdateWindowTitle() const
 	title += m_taaClamping ? L" Clamp:On" : L" Clamp:Off";
 	title += m_taaShowVelocity ? L" Motion:On" : L" Motion:Off";
 	title += m_animationPaused ? L" Anim:Pause" : L" Anim:Play";
+	if (m_atmosphereEnabled || (!m_sceneDefinitions.empty() && m_sceneDefinitions[m_currentSceneIndex].EnableAtmosphereDemo)) {
+		auto ShortNumber = [](float value) { auto text = std::to_wstring(value); return text.substr(0, text.find(L'.') + 3); };
+		title += m_atmosphereEnabled ? L" | Atmos:On" : L" | Atmos:Off";
+		title += m_atmosphereSettings.ObjectsEnabled ? L" Aerial:On" : L" Aerial:Off";
+		title += L" R:" + ShortNumber(m_atmosphereSettings.RayleighScale);
+		title += L" M:" + ShortNumber(m_atmosphereSettings.MieScale);
+		title += L" Sun:" + ShortNumber(DirectX::XMConvertToDegrees(m_sunAzimuth)) + L"/" + ShortNumber(DirectX::XMConvertToDegrees(m_sunElevation));
+	}
+	if (!m_sceneDefinitions.empty() && m_sceneDefinitions[m_currentSceneIndex].EnableAtmosphereDemo) {
+		title += L" | Atmosphere Lab | G atmosphere | H aerial | F9 clean/F10 dirty | U/J Rayleigh | I/K Mie | arrows sun | 1-7 scenes";
+		SetWindowTextW(MainWnd(), title.c_str());
+		return;
+	}
 	if (!m_sceneDefinitions.empty() && m_sceneDefinitions[m_currentSceneIndex].EnableTaaDemo) {
-		title += L" | TAA Lab | T TAA | V motion | R reprojection | C clamp | P pause | Home reset | 1-6 scenes";
+		title += L" | TAA Lab | T TAA | V motion | R reprojection | C clamp | P pause | Home reset | 1-7 scenes";
 		SetWindowTextW(MainWnd(), title.c_str());
 		return;
 	}
@@ -4213,6 +4266,10 @@ void Framework::BuildSceneObjects()
 	const SceneDefinition& scene = m_sceneDefinitions[m_currentSceneIndex];
 
 	m_taaDemoMovingObject = UINT_MAX;
+	if (scene.EnableAtmosphereDemo) {
+		BuildAtmosphereDemoObjects();
+		return;
+	}
 	if (scene.EnableTaaDemo) {
 		BuildTaaDemoObjects();
 		return;
@@ -4858,6 +4915,16 @@ void Framework::BuildSceneLights()
 		? nullptr
 		: &m_sceneDefinitions[m_currentSceneIndex];
 
+	if (scene && scene->EnableAtmosphereDemo) {
+		m_directionalLightCount = 1;
+		m_pointLightCount = m_spotLightCount = 0;
+		m_directionalLights[0].Color = { 1.0f, 1.0f, 1.0f, 1.0f };
+		const auto toSun = atmosphere::SunDirection(m_sunAzimuth, m_sunElevation);
+		m_directionalLights[0].DirectionIntensity = {
+			-toSun.x, -toSun.y, -toSun.z, m_sunElevation > 0.0f ? 1.25f : 0.0f
+		};
+		return;
+	}
 	if (scene && scene->LightingPreset == SceneLightingPreset::Bistro)
 	{
 		m_directionalLightCount = std::min<UINT>(2u, static_cast<UINT>(m_directionalLights.size()));
@@ -6619,7 +6686,7 @@ void Framework::BuildSceneGeometryUpload()
 	}
 	else if (vertices.empty())
 	{
-		if (!scene.EnableScatterField && !scene.EnableTaaDemo) {
+		if (!scene.EnableScatterField && !scene.EnableTaaDemo && !scene.EnableAtmosphereDemo) {
 			throw std::runtime_error("Scene loaded but produced 0 vertices.");
 		}
 

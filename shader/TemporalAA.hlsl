@@ -7,7 +7,9 @@ cbuffer TemporalCB : register(b0)
     uint gReprojectionEnabled;
     uint gClampingEnabled;
     uint gShowVelocity;
-    uint3 gTemporalPadding;
+    uint gSkyReprojection;
+    uint2 gTemporalPadding;
+    float4x4 gClipToPreviousSky;
 };
 
 Texture2D<float4> gCurrentColor : register(t0);
@@ -72,6 +74,16 @@ float4 PSTemporalAA(FullscreenOut input) : SV_Target
     int2 center = int2(floor(samplePosition + 0.5f));
     int2 centerClamped = clamp(center, int2(0, 0), lastPixel);
     float2 centerVelocity = gVelocity.Load(int3(centerClamped, 0));
+    bool skyPixel = gSkyReprojection != 0u
+        && gCurrentDepth.Load(int3(centerClamped, 0)) >= 1.0f - 1e-7f;
+    if (skyPixel)
+    {
+        float2 currentNdc = input.UV * float2(2.0f, -2.0f) + float2(-1.0f, 1.0f);
+        float4 previousClip = mul(float4(currentNdc, 1.0f, 1.0f), gClipToPreviousSky);
+        float2 previousUV = previousClip.xy / max(previousClip.w, 1e-6f)
+            * float2(0.5f, -0.5f) + 0.5f;
+        centerVelocity = previousClip.w > 0.0f ? input.UV - previousUV : float2(2.0f, 2.0f);
+    }
     if (gShowVelocity != 0u)
         return float4(MotionColor(centerVelocity), 1.0f);
 
@@ -114,8 +126,9 @@ float4 PSTemporalAA(FullscreenOut input) : SV_Target
     if (gHistoryValid == 0u)
         return float4(current, 1.0f);
 
+    // A sky center follows a direction at infinity, not a nearby silhouette's motion.
     float2 motion = gReprojectionEnabled != 0u
-        ? gVelocity.Load(int3(velocityPixel, 0)) : 0.0f.xx;
+        ? (skyPixel ? centerVelocity : gVelocity.Load(int3(velocityPixel, 0))) : 0.0f.xx;
     float2 historyUV = input.UV - motion;
     // Reject rather than clamp invalid history coordinates at the image edge.
     if (any(historyUV < 0.0f.xx) || any(historyUV > 1.0f.xx))

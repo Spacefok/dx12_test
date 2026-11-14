@@ -15,12 +15,17 @@ struct alignas(16) TemporalAAConstants {
     std::uint32_t ReprojectionEnabled = 1;
     std::uint32_t ClampingEnabled = 1;
     std::uint32_t ShowVelocity = 0;
-    std::uint32_t Padding[3] = {};
+    std::uint32_t SkyReprojection = 0;
+    std::uint32_t Padding[2] = {};
+    DirectX::XMFLOAT4X4 ClipToPreviousSky = {
+        1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
 };
 
-static_assert(sizeof(TemporalAAConstants) == 48, "TemporalCB size mismatch.");
+static_assert(sizeof(TemporalAAConstants) == 112, "TemporalCB size mismatch.");
 static_assert(offsetof(TemporalAAConstants, HistoryWeight) == 16, "TemporalCB blend offset mismatch.");
 static_assert(offsetof(TemporalAAConstants, ShowVelocity) == 32, "TemporalCB flags offset mismatch.");
+static_assert(offsetof(TemporalAAConstants, SkyReprojection) == 36
+    && offsetof(TemporalAAConstants, ClipToPreviousSky) == 48, "TemporalCB sky fields mismatch.");
 
 namespace taa {
 
@@ -30,6 +35,25 @@ struct JitterOffset {
     DirectX::XMFLOAT2 Pixel = { 0.0f, 0.0f };
     DirectX::XMFLOAT2 UV = { 0.0f, 0.0f };
 };
+
+// Map a current clip-space ray into the previous camera without translating the sky.
+// Inputs are ordinary row-vector matrices, before the transpose used for HLSL upload.
+inline DirectX::XMMATRIX SkyClipToPrevious(const DirectX::XMMATRIX& currentViewProj,
+    const DirectX::XMMATRIX& previousViewProj, const DirectX::XMFLOAT3& eye)
+{
+    using namespace DirectX;
+    if (XMVector4Equal(currentViewProj.r[0], previousViewProj.r[0])
+        && XMVector4Equal(currentViewProj.r[1], previousViewProj.r[1])
+        && XMVector4Equal(currentViewProj.r[2], previousViewProj.r[2])
+        && XMVector4Equal(currentViewProj.r[3], previousViewProj.r[3])) {
+        return XMMatrixIdentity();
+    }
+    XMMATRIX directionOnly = XMMatrixIdentity();
+    directionOnly.r[3] = XMVectorZero(); // w=0 removes translation in the previous view.
+    return XMMatrixInverse(nullptr, currentViewProj)
+        * XMMatrixTranslation(-eye.x, -eye.y, -eye.z)
+        * directionOnly * previousViewProj;
+}
 
 inline float Halton(std::uint32_t index, std::uint32_t base)
 {
