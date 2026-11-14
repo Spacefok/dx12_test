@@ -65,18 +65,6 @@ invalidate history. Motion debug bypasses accumulation and post effects.
 The opaque HDR lighting result is accumulated before tone mapping. Transparent
 objects and particles are drawn afterwards and are not part of TAA history.
 
-From a Visual Studio Developer PowerShell:
-
-~~~powershell
-New-Item -ItemType Directory -Force x64\TemporalAATests | Out-Null
-cl /nologo /std:c++17 /EHsc /W4 /Iinclude tests\TemporalAATests.cpp /Fox64\TemporalAATests\ /Fex64\TemporalAATests\TemporalAATests.exe
-.\x64\TemporalAATests\TemporalAATests.exe
-~~~
-
-These CPU tests check Halton samples, jitter scaling, projection signs, and
-reprojection coordinates. Shader compilation and temporal image quality also
-need a rendered run.
-
 ## Terrain Demo
 
 Start directly in the terrain scene without loading any external scene models:
@@ -123,20 +111,6 @@ To inspect the implementation:
 Changing the error threshold, toggling frustum culling, or resetting the camera
 also resumes live terrain selection. Octree and occlusion toggles apply to the
 other scene objects; terrain visibility uses its own quadtree traversal.
-
-## Terrain Tests
-
-From a Visual Studio Developer PowerShell at the repository root:
-
-~~~powershell
-New-Item -ItemType Directory -Force x64\TerrainTests | Out-Null
-cl /nologo /std:c++17 /EHsc /W4 /Iinclude tests\TerrainTests.cpp src\Terrain.cpp /Fox64\TerrainTests\ /Fex64\TerrainTests\TerrainTests.exe
-.\x64\TerrainTests\TerrainTests.exe
-~~~
-
-These CPU tests check quadtree coverage, LOD refinement, D3D frustum planes,
-mesh winding, bounds, tile seams, and malformed input. Shader compilation and
-rendered output still require starting the application.
 
 ## Scene Assets
 
